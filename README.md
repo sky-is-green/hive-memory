@@ -133,6 +133,7 @@ runs/<ts>/
   },
   "conversations": [ ...per-turn PES/latency/reply... ],
   "protocol": [ ...P1-P10 results... ],
+  "retrieval_diagnostic": { ...deterministic P2 (the real retrieval evidence)... },
   "baselines": { ... }
 }
 ```
@@ -146,7 +147,34 @@ PES = 0.30·RetrievalPrecision + 0.20·RoutingAccuracy + 0.20·LatencyHealth
 
 Bands: `≥80` GREEN · `60–79` YELLOW · `40–59` RED · `<40` CRITICAL.
 
-### 3.2 The P1–P10 protocol (the scientific claims)
+> **Read `retrieval_diagnostic`, not `ground_truth.retrieval_precision`, for P2.**
+> The oracle-based `retrieval_precision` in `ground_truth` is a confounded
+> per-turn *sufficiency* rate: `predicted_relevant` is hardcoded `True` and
+> `actually_relevant` is the oracle's verdict, so recall always reports 100% and
+> false-eviction 0%. The deterministic `retrieval_diagnostic` block measures the
+> white paper's actual P2 (labeled query-chunk retrieval) against the fixture's
+> own ground-truth answers — no LLM oracle, no confound. Re-run it on any run dir
+> with `python -m experiments.retrieval_diagnostic runs/<ts>`.
+
+### 3.2 The deterministic P2 diagnostic
+
+Each sampled turn's assembled context is checked for the fixture's known answer
+facts (the answer's content terms beyond the query). Reported:
+
+- `retrieval_recall` — % of sampled turns whose assembled context contains ≥50%
+  of the answer facts.
+- `retrieval_recall_retrievable` — same, restricted to turns where the answer
+  *could* exist in prior history (first-mention turns are structurally
+  unretrievable and reported separately).
+- `retrieval_precision` — sentence-level proxy (share of assembled sentences
+  sharing a topic term with the query).
+
+With per-conversation store isolation (one `Hive` per conversation), live
+replays reach **~94% recall on retrievable turns** — meeting the ≥90% P2 target.
+The two failure modes that previously masked this (cross-conversation
+contamination and hedge-reply poisoning) are fixed; see `AI-HANDOFF.md` §5.1.
+
+### 3.3 The P1–P10 protocol (the scientific claims)
 
 Each prediction returns `{id, title, status, evidence, note}` where status is
 `PASS` / `FAIL` / `SKIP` / `REPORT`:
@@ -167,7 +195,7 @@ Each prediction returns `{id, title, status, evidence, note}` where status is
 `SKIP` predictions aren't failures — they're measurements that need live data,
 the P5 training run, or human labeling.
 
-### 3.3 The ground-truth DB (SQLite)
+### 3.4 The ground-truth DB (SQLite)
 
 ```powershell
 .\.venv\Scripts\python -c "import sqlite3; c=sqlite3.connect('runs/<ts>/ground_truth.sqlite'); \
@@ -178,13 +206,13 @@ Tables: `oracle_labels`, `hive_decisions`, `parameter_versions`. Metrics (via
 `oracle.ground_truth.GroundTruthDB`): `retrieval_precision()`,
 `retrieval_recall()`, `false_eviction_rate()`, `routing_accuracy()`.
 
-### 3.4 Comparing to baselines (did the hive help?)
+### 3.5 Comparing to baselines (did the hive help?)
 
 The baselines give the **before** numbers. Compare `aggregate.avg_pes` (hive) vs
 `baseline_lm_studio.json`/`baseline_fifo.json` `aggregate.avg_pes` on the same
 conversations. That comparison is the evidence that hive-curated context helps.
 
-### 3.5 Event-log summary
+### 3.6 Event-log summary
 
 ```powershell
 .\.venv\Scripts\python -m logs.query --dir runs/<ts>/logs --include-archive
@@ -210,6 +238,19 @@ HiveConfig(
 
 - The primary LLM is whatever is loaded in LM Studio; the hive talks to it via
   the OpenAI-compatible `backend/` layer.
+- **Hedge replies are filtered from the store** (`filter_hedge_replies=True`):
+  a refusal reply ("no information regarding X") is not stored as a chunk,
+  because the hive would later retrieve its own refusal *as context* and keep
+  refusing (live runs showed ~50% of replies were hedges). The query chunk is
+  still stored.
+- **Model choice matters more than any harness tweak.** Live probing
+  (2026-08-22): every qwen variant in LM Studio **ignores**
+  `enable_thinking=false` and burns the output budget on reasoning (empty
+  replies); `prism-ml/bonsai-27b` is the loaded model that honors it
+  (reason=0, ~12.7 tps). Prefer it for live runs. The strict pinned prefix
+  ("answer using ONLY the provided context") forces refusals on first-mention
+  turns; the default now allows clearly-marked general-knowledge fallback so
+  facts actually get ingested into the store.
 - The medium drone is only invoked on escalation; with the stock embedding model
   confidence ≈ 1.0, so it rarely fires — leave `enable_medium=False` unless
   testing P6.
@@ -232,6 +273,7 @@ HiveConfig(
 tests/run_hive_tests.py            # grouped test runner
 tests/benchmarks/                  # speed-group benchmarks
 experiments/generate_data.py       # live data-generation benchmark
+experiments/retrieval_diagnostic.py# deterministic P2 (fixture ground truth)
 experiments/run_p1_p10.py          # P1-P10 protocol driver
 experiments/p5_targeted_masking.py # targeted-masking training experiment
 oracle/                            # async oracle, ground-truth DB, labeling

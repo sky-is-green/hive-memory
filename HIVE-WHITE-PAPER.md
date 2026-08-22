@@ -116,7 +116,7 @@ Tokens/sec is the model's *decode* rate, recorded from the backend's `usage.comp
 3. Relevance-ranked selection therefore concentrates on relevant chunks.
 4. *Conclusion:* precision/recall exceed recency-based selection.
 
-**Measurement:** Use oracle-labeled ground truth (Postulate 4). Compute precision = relevant_retrieved/total_retrieved; recall = relevant_retrieved/total_relevant over the test set.
+**Measurement:** Use oracle-labeled ground truth (Postulate 4). Compute precision = relevant_retrieved/total_retrieved; recall = relevant_retrieved/total_relevant over the test set. In this repo, the canonical measurement is the *deterministic* diagnostic (`experiments.retrieval_diagnostic`) — the synthetic corpus carries its own ground truth (each user query has a known assistant answer), so P2 is computed from the fixture's answer facts appearing in the assembled context, with no LLM-oracle confound. (An early "oracle precision" implementation hardcoded `predicted_relevant=True`, making recall/false-eviction trivially 100%/0%; that block is retained in reports for compatibility but is not the evidence.)
 
 **Falsification:** Either metric falls below target on two independent labeled sets.
 
@@ -314,6 +314,7 @@ it.
 5. **Confounded ablations.** Disabling a component changes downstream decisions of other components; ablation results should be read as upper bounds on component contribution.
 6. **Small-model ceiling.** The drones are deliberately small; the entire architecture's ceiling may be bounded by encoder quality, which the medium-drone tier only partially addresses.
 7. **Prefix-cache attribution.** On backends with automatic prefix caching (LM Studio / llama.cpp), flat throughput is co-produced by the hive's bounded context *and* a byte-stable pinned system prefix whose KV is reused every turn. The naive FIFO baseline's window shifts each turn and never reuses KV, so the P1 comparison is "curation + stable prefix" vs. "shifting window" rather than raw context length. The falsification conditions are unchanged, but the throughput claim is attributable to both mechanisms, and replication on a backend without prefix caching (e.g., vLLM without pinned pages) may observe a smaller gap.
+8. **Evaluation-harness confounds.** Live validation surfaced two harness-level failure modes that look like architecture failures if unaddressed: (a) *cross-conversation contamination* — running multiple conversations through one context store lets earlier conversations' chunks crowd out the current one's, collapsing retrieval precision; conversations must be isolated per store; (b) *hedge-reply poisoning* — if the model's "no information" refusals are stored as chunks, they are later retrieved *as context* and perpetuate refusal, and a strict "answer only from context" system prompt forces exactly those refusals on first-mention turns; refusals should be filtered from the store and the prompt should permit clearly-marked general-knowledge fallback so facts can be ingested.
 
 ---
 

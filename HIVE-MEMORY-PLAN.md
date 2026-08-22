@@ -1957,6 +1957,7 @@ recoveries. This prevents oscillation between degradation levels.
 | 3 — LLM Integration | S3 | — | 2026-08-20 | DONE (backends, KV-cache mgr, health, degradation, drone pool, interop; mock-verified 100-turn; live vLLM/LM Studio side-by-side pending real backends) |
 | 4 — Oracle & Optimization | S4 | — | 2026-08-20 | DONE (oracle, ground-truth DB, A/B, sweeps, ablation, routing classifier; 148 unit + 13 integration tests pass) |
 | 5 — Production Hardening | S5 | — | 2026-08-20 | DONE (shadow mode, preloader, rollback, checkpoints, full benchmark, 500-turn stability; 173 unit + 16 integration tests pass) |
+| — Measurement fixes (post-S5) | M1 | 1545314+ | 2026-08-22 | DONE (repo git-initialized; deterministic P2 diagnostic added — the oracle-based retrieval metric was a confounded sufficiency rate; per-conversation store isolation added — one shared store contaminated ~90% of later conversations' context; hedge-reply filtering + softer pinned prefix added — model refusals were stored and re-retrieved as context, starving fact ingestion; live3 validation run in flight) |
 
 ---
 
