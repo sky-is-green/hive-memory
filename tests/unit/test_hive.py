@@ -37,6 +37,47 @@ def test_store_grows_across_turns():
     assert h.store.count() == n1 + 2  # query + reply
 
 
+def test_hedge_replies_not_stored_as_chunks():
+    """Refusal/hedge replies ('no information regarding X') must not be stored:
+    they would later be retrieved as context, poisoning retrieval. The query
+    chunk is still stored so what was asked is recorded."""
+    from cortex.e2e import MockTransport
+
+    class HedgeTransport(MockTransport):
+        def post(self, url, json=None, headers=None, timeout=None):
+            self.last = (url, json)
+            return _Resp_hedge({"choices": [{"message": {"content":
+                "Based on the provided context, there is no information "
+                "regarding rate limits for the REST API."}}]})
+
+    class _Resp_hedge:
+        ok = True
+        def __init__(self, payload):
+            self._payload = payload
+        def json(self):
+            return self._payload
+        def raise_for_status(self):
+            pass
+
+    backend = LMStudioBackend(base_url="localhost", model="m", transport=HedgeTransport())
+    h = _hive(backend=backend)
+    r = h.process_turn("Can we change how rate limits works?")
+    assert r.reply  # reply still returned to the user
+    contents = [c.content for c in h.store.all_chunks()]
+    assert len(contents) == 1  # only the query chunk
+    assert contents[0] == "Can we change how rate limits works?"
+    assert not any("no information" in c for c in contents)
+
+
+def test_hedge_filter_can_be_disabled():
+    from cortex.e2e import MockTransport
+
+    backend = LMStudioBackend(base_url="localhost", model="m", transport=MockTransport())
+    h = _hive(backend=backend, config=HiveConfig(filter_hedge_replies=False))
+    h.process_turn("q1")
+    assert h.store.count() == 2  # query + (non-hedge) reply both stored
+
+
 def test_no_backend_mode():
     h = _hive()
     r = h.process_turn("q")

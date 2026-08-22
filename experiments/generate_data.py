@@ -62,7 +62,9 @@ from sieve.ultra_small import UltraSmallDrone
 
 DEFAULT_PINNED_PREFIX = (
     "You are an assistant operating in the Hive Memory system. "
-    "Answer using only the provided context and conversation history."
+    "Answer using the provided context and conversation history whenever they "
+    "contain the needed information. If the context is insufficient, you may "
+    "draw on your general knowledge, but clearly mark any such part."
 )
 
 

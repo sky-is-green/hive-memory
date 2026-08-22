@@ -38,6 +38,11 @@ class HiveConfig:
     max_context: int = 8192
     max_chunks: int = 1000
     max_tokens: Optional[int] = None  # reply cap for iteration/stability runs
+    # When the backend returns a refusal/hedge ("no information regarding X"),
+    # do NOT store it as a chunk: such replies pollute the store and later get
+    # retrieved as "context", poisoning retrieval. Filtering them keeps the
+    # store fact-bearing (live finding: ~50% of replies were hedges).
+    filter_hedge_replies: bool = True
     budget_ranges: dict = field(default_factory=lambda: {
         "ultra_small": (1000, 3000),
         "medium": (3000, 5000),

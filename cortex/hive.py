@@ -166,7 +166,7 @@ class Hive:
 
         if record_exchange:
             self.store.add_chunk(self.turn, query)
-            if reply:
+            if reply and not (self.config.filter_hedge_replies and self._is_hedge_reply(reply)):
                 self.store.add_chunk(self.turn, reply)
 
         util = token_count / max(budget, 1)
@@ -183,6 +183,31 @@ class Hive:
         )
 
     # ------------------------------------------------------------------
+    @staticmethod
+    def _is_hedge_reply(reply: str) -> bool:
+        """Detect refusal/hedge replies that must not be stored as context.
+
+        Live runs showed ~50% of replies were "no information regarding X"
+        boilerplate. Storing them pollutes the store: the hedge is later
+        retrieved *as context* for the same topic, so the model sees its own
+        refusal instead of a fact, and keeps refusing. Filtering keeps the
+        store fact-bearing (query chunks still record what was asked).
+        """
+        t = (reply or "").strip().lower()
+        if not t:
+            return True  # empty replies carry no facts
+        markers = (
+            "no information",
+            "no specific information",
+            "no information available",
+            "cannot fulfill",
+            "i cannot",
+            "unable to fulfill",
+            "do not have access",
+            "does not provide",
+        )
+        return any(m in t for m in markers)
+
     def _fifo_context(self, query: str) -> str:
         history = [{"role": "user", "content": c.content} for c in self.store.all_chunks()]
         msgs = build_fifo_messages(history + [{"role": "user", "content": query}])
