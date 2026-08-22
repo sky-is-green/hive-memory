@@ -30,6 +30,18 @@ We propose that context management should be **externalized** from the generativ
 
 This is a division of labor: the generative model does what it does best (generation); the encoder fleet does what it does best (comparison, similarity, filtering). We hypothesize this decomposition yields strictly better long-horizon behavior than feeding the primary model raw, unbounded context.
 
+### 1.3 The scope of this evaluation
+
+HiveBench evaluates **one thing**: a bounded-attention policy under memory pressure. Given a conversation that outgrows the context window, the system must decide — every turn, on a fixed budget — *which* pieces of history deserve to be in front of the generative model, and which can be discarded. That is the entire claim: that a cheap, separable selection layer can keep a bounded context as informative as an unbounded one.
+
+These tests exist because that claim is easy to assert and hard to demonstrate. Any pipeline that "keeps recent history and cuts the old stuff" looks superficially like context management. The difference is measurable: under the same memory pressure, does the bounded context actually *contain the answer* when the answer exists in history? That is P2. Does it keep that property as the conversation grows? That is P1. Does the selection policy respond correctly when the conversation's center of gravity shifts? That is drift (P10), decay (P4), and routing (P8).
+
+So the tests are not about intelligence, similarity to people, or any species-level trait. They are about **whether an explicit, resource-constrained attention policy beats the trivial baselines (recent-window / FIFO) at the one job it was designed for**.
+
+**Why we need these tests.** The claim is falsifiable and currently unproven in the live setting: the offline suite is green, but live runs have been dominated by measurement artifacts rather than the policy itself, and we do not yet have a clean live result showing the bounded context carried the fact when the unbounded history contained it. The selection policy is the product — the generative model is a commodity, so if the policy is indistinguishable from FIFO the project has no reason to exist. The tests are also the only defense against silent failure modes that look healthy: a policy that retrieves most of what it stored can still starve if it stored little of what mattered (see the `ingestion_rate` / `perfect_hive_ceiling` decomposition in P2), and they give the calibration knobs (decay multiplier, drift threshold, budget ranges, routing threshold) an objective to be tuned against instead of a guess.
+
+**Why it is beneficial.** The tests convert "context management" from a vibe into a number: one block of the run report shows what the hive stored, what it retrieved, and what the model itself failed to contribute — deterministically, replayable, cheap, with no LLM-oracle opinion required. The recall/ingestion split tells us *which* knob to turn and stops us from blaming the architecture for a model's output distribution. They make the bounded-context argument concrete — the lost "off-screen" history is recovered by a selective policy, not mourned — and they publish the ceiling (`perfect_hive_ceiling`) so the metric cannot be gamed into looking better than the data allows.
+
 ---
 
 ## 2. Related Work

@@ -14,7 +14,10 @@ for every turn, so a generative model performs well over arbitrarily long
 conversations on consumer hardware.
 
 - `HIVE-MEMORY-PLAN.md` — the executable implementation plan (sections S0–S5).
-- `HIVE-WHITE-PAPER.md` — the theory + 10 falsifiable predictions (**P1–P10**).
+- `HIVE-WHITE-PAPER.md` — the theory + 10 falsifiable predictions (**P1–P10**) +
+  the **evaluation scope (§1.3)**: what HiveBench measures (a bounded-attention
+  policy under memory pressure, not LLM capability or species resemblance),
+  why those tests are needed, and why they're beneficial.
 - `README.md` — the benchmark usage guide (named **HiveBench**).
 - `HIVE-DIAGRAMS.md` — diagrams: why HIVE beats no-HIVE, why testing is thorough,
   and the improvement action plan.
