@@ -54,7 +54,7 @@ naming). `__init__.py` files exist for all packages.
 | `oracle/` | `async_oracle.py`, `ground_truth.py` (SQLite), `labeling.py` |
 | `logs/` | `event_logger.py`, `query.py` |
 | `testing/` | `ab_test.py`, `ablation.py`, `optimization.py`, `shadow_mode.py` |
-| `experiments/` | `generate_data.py` (live benchmark), `run_p1_p10.py` (protocol), `p5_targeted_masking.py`, `dashboard.py` (KeepAwake + terminal dashboard), `launcher.py` (Tkinter run app), **`retrieval_diagnostic.py`** (deterministic P2, fixture ground truth — no oracle confound) |
+| `experiments/` | `generate_data.py` (live benchmark), `run_p1_p10.py` (protocol), `p5_targeted_masking.py`, `dashboard.py` (KeepAwake + terminal dashboard), `launcher.py` (Tkinter run app), **`retrieval_diagnostic.py`** (deterministic P2, fixture ground truth — no oracle confound), **`model_probe.py`** (fast all-models speed sweep: TTFT + decode/effective tps + reasoning-burn detection) |
 | `tests/` | `run_hive_tests.py` (grouped runner), `unit/`, `integration/`, `benchmarks/`, `fixtures/` |
 | `vocab/` | `code.json`, `general.json` (domain relevance vocab) |
 
@@ -261,13 +261,66 @@ stacked **measurement/ingestion artifacts**, each now fixed and proven:
 2. Cross-conversation contamination (~90% of store was other convs) → store
    isolation; replay recall-on-retrievable 93.9% (≥90% target).
 3. Hedge-reply poisoning + forced refusal (strict prefix) → hedge filter + softer
-   prefix (fix validated in the in-progress `20260822_live3` run).
+   prefix. **Note: live3 did NOT validate to ≥90%** (retrievable recall 50.0%,
+   overall 39.8%, precision 12.8% — see §9). The fixes worked offline (replay
+   93.9%) but the live run still falls short; the remaining gap is under
+   investigation (ingestion vs retrieval), not a proven hive failure.
 
 The remaining RED components are calibration, not science:
 - `LatencyHealth` is ms-calibrated (50ms=100, 200ms=0) vs live turns of 20–50s —
   floors at 0 by the paper's own formula (documented in `post_run_pes.notes`).
 - `ThroughputHealth` uses hardcoded `baseline_tps=30.0` vs real ~14–21 tps on this
   hardware — a baseline-calibration question, not a hive failure.
+
+### 5.3 Model speed probe (`experiments/model_probe.py`)
+
+A fast streaming sweep over **every model loaded in LM Studio** for the live-backend
+decision: per model it reports **TTFT ms** (request-start → first visible token,
+includes model load), **effective tps** (completion tokens / whole request — the
+real "how usable is this model" number), **decode tps** (tokens / first-token→end,
+pure generation, excludes one-time load), plus PASS/EMPTY/FAIL classification.
+
+- `PASS` — visible reply produced.
+- `EMPTY` — **reasoning-burn**: empty visible reply but `completion_tokens` hit the
+  cap (model ignored `enable_thinking=false`, burned budget on chain-of-thought).
+- `FAIL` — HTTP/load error (model unloadable from this server).
+
+Exit code: 0 = all probed models answered, 1 = any EMPTY/FAIL, 2 = server
+unreachable / nothing to probe. `--model <substring>` filters; `--json <path>`
+dumps full results. Unit-tested (`tests/unit/test_model_probe.py`, 7 tests).
+
+**Full-sweep result (2026-08-22, `runs/20260822_modelsweep3.json`), 17 models:**
+
+| Model | Status | TTFT ms | eff tps | dec tps |
+|---|---|---|---|---|
+| google/gemma-4-12b-qat | PASS | 16199 | 5.9 | 1635 |
+| carnice-qwen3.6-moe-35b-a3b-apex-mtp | PASS | 20746 | 5.6 | — |
+| carnice-qwen3.6-moe-35b-a3b-apex | PASS | 20457 | 4.3 | 1222 |
+| qwopus3.6-35b-a3b-coder-apex-mtp | PASS | 20642 | 3.0 | 609 |
+| qwen3.8-27b@iq4_xs | PASS | 23579 | 1.4 | 171 |
+| kat-coder-v2.5-dev-apex | PASS | 14009 | 1.3 | 256 |
+| qwen3.6-35b-a3b-claude-4.7-opus-reasoning-distilled-apex-mtp | PASS | 28015 | 1.2 | — |
+| prism-ml/bonsai-27b | PASS | 11325 | 0.2 | 31 |
+| ornith-1.0-35b-apex | EMPTY | — | 5.8 | — |
+| qwen-agentworld-35b-a3b-apex | EMPTY | — | 6.0 | — |
+| qwen3.6-35b-a3b-apex-mtp | EMPTY | — | 6.1 | — |
+| qwen3.8-27b@q3_k_xl | EMPTY | — | — | — |
+| qwen3.8-27b-dspark | FAIL | — | — | — |
+| ternary-bonsai-27b-grug-lora | FAIL | — | — | — |
+| ternary-bonsai-27b@q2_0 | FAIL | — | — | — |
+| ternary-bonsai-27b@q4_1 | FAIL | — | — | — |
+| text-embedding-nomic-embed-text-v1.5 | FAIL | — | — | — |
+
+Takeaways:
+- **`gemma-4-12b-qat` is the best usable model** — lowest load-adjusted TTFT and
+  highest decode rate (1635 tps); a strong live-run candidate.
+- **`carnice-qwen3.6-moe-35b-a3b-apex(-mtp)`** lead effective throughput (~4.3–5.6
+  tps incl. load); good alternative for long runs.
+- **`prism-ml/bonsai-27b`** is the *slowest* usable model (31 dec tps, 0.2 eff tps)
+  — kept only because it honors `--no-thinking`; see §9 for the reasoning-burn
+  caveat on the qwen family.
+- The four EMPTY models and three `ternary-bonsai-27b` variants (unloadable) are
+  unusable live; the embedding model is not a chat backend.
 
 ---
 
@@ -287,7 +340,7 @@ estimated + measured duration:
 .\.venv\Scripts\python tests\run_hive_tests.py --group speed|intelligence|skills|maximum
 ```
 
-~283 unit + integration tests; all groups pass. Benchmarks include:
+~290 unit + integration tests; all groups pass. Benchmarks include:
 per-turn assembly p50 ≈ **3.4ms**, throughput ≈ **285 turns/s**, peak RSS ≈
 **34.7 MB**, real all-MiniLM per-pair p50 ≈ **13–15ms**, classifier p50 ≈ **0.04ms**.
 
@@ -358,11 +411,13 @@ Each run writes `runs/<ts>/`: `run_report.json`, `ground_truth.sqlite`,
 ## 9. Current status & recommended next steps
 
 **Status:** All S0–S5 + the post-handoff run tooling + the 2026-08-22 measurement
-fixes are built. Full offline suite green (~283 tests; all groups PASS). Live runs
-now complete successfully end-to-end (E2E → oracle → deterministic P2). The
-measurement/ingestion artifacts that kept PES RED are fixed and individually
-proven (see §5.1); **the final full evidence run (protocol + baselines) is the
-remaining step, pending the live3 validation result.**
+fixes + the **model speed probe** (`experiments/model_probe.py`, §5.3) are built.
+Full offline suite green (~283 tests; all groups PASS). Live runs complete
+end-to-end (E2E → oracle → deterministic P2 → report). The measurement/ingestion
+artifacts that kept PES RED are fixed and individually proven (see §5.1); the
+hedge/prefix validation run **live3 completed but did not reach ≥90% retrievable
+recall (50.0%)** — the live gap is under investigation (§9 next steps), and the
+full evidence run awaits that resolution.
 
 **Live-run history (each informed fixes):**
 - `runs/20260820_222808` — very first live attempt; failed instantly (real-model
@@ -389,10 +444,14 @@ remaining step, pending the live3 validation result.**
   context). Post-run PES 44.07 RED (latency 0 by formula, throughput 47% vs
   hardcoded baseline 30 tps).
 - `runs/20260822_live3` — **validation run for the hedge/prefix fixes**
-  (15 convs / 138 turns, same config as live2). Was ~21% done at handoff; read its
-  `run_report.json` when it finishes (ETA ~1h). Expected: retrievable recall back
-  up to ≥90% and hedge rate near 0, since refusals are no longer stored and the
-  prefix no longer forces them.
+  (15 convs / 138 turns, `prism-ml/bonsai-27b`, same config as live2). Resumed
+  from an interrupted checkpoint (35/138) and completed. **Did NOT validate:
+  deterministic retrievable recall 50.0% (overall 39.8%, precision 12.8%)**,
+  well below the ≥90% target. Post-run PES 59.7 RED (retrieval_precision 17.1,
+  latency floor 0, throughput 7.6). The hedge/prefix fixes worked in replay
+  (93.9%) but not live — the gap (ingestion vs retrieval) is the open question
+  in §9. This was the run that confirmed the benchmark harness completes
+  end-to-end (E2E → oracle → report) even when science targets are missed.
 
 **Key decisions made across sessions:**
 1. No reply cap by default (`DEFAULT_MAX_TOKENS = 4096`); `--max-tokens` is opt-in.
@@ -417,19 +476,32 @@ remaining step, pending the live3 validation result.**
    store (ingestion failure) and retrieval starves.
 
 **Next steps (in order):**
-1. **Read `runs/20260822_live3/run_report.json`** when the validation run
-   finishes — confirm retrievable recall ≥90% and hedge rate ~0.
-2. **Close P2 with a full evidence run** (once validated): `--live --model
+1. **Investigate why live3 retrievable recall stayed 50%** despite the
+   hedge/prefix fixes. Candidates (in order of likelihood): (a) ingestion still
+   failing for some fact classes (facts like `json`/`problem` missing from the
+   store — check `runs/20260822_live3` chunk contents for fact terms);
+   (b) retrieval scoring rejecting the relevant chunk (drift/stale decay);
+   (c) `max-convs 15` long conversations outgrow the 1–1.8k-token budget before
+   the fact is re-asked. Replay live3's assembled contexts through
+   `retrieval_diagnostic` with the fixture answers to separate ingest from fetch.
+2. **Re-validate on a faster model.** The sweep (§5.3) found `gemma-4-12b-qat`
+   (5.9 eff tps, 1635 dec tps) and `carnice-qwen3.6-moe-35b-a3b-apex-mtp`
+   (5.6 eff tps) are far faster than `prism-ml/bonsai-27b` (0.2 eff tps). Run the
+   same 3-conv validation on one of these (`--live --model google/gemma-4-12b-qat
+   --max-convs 3 --max-turns 12 --confidence off --checkpoint-every 5`) to check
+   whether the live recall gap was partly model/hedge-driven. Caveat: only bonsai
+   honors `--no-thinking` today, so check gemma's hedge rate before a full run.
+3. **Close P2 with a full evidence run** (once validated): `--live --model
    prism-ml/bonsai-27b --max-convs 20 --protocol --baselines --confidence off
    --checkpoint-every 5` (overnight; keep-awake automatic). The deterministic
    diagnostic in the report is the P2 evidence.
-3. **Fix `baseline_tps` calibration** (`generate_data.py:407` hardcodes 30.0;
+4. **Fix `baseline_tps` calibration** (`generate_data.py:407` hardcodes 30.0;
    real hardware ≈14–21 tps → throughput component ~47–69%). Measure a real
    baseline with `--baselines` (LM Studio rolling tps) and feed it into
    `_compute_post_run_pes`. This is a calibration fix, not a hive fix.
-4. **P5 targeted-masking training** (`experiments.p5_targeted_masking`) and
+5. **P5 targeted-masking training** (`experiments.p5_targeted_masking`) and
    optionally **P7 human labeling**.
-5. **Optional: package** — `pyproject.toml`, CLI entry points, LICENSE, CI — only
+6. **Optional: package** — `pyproject.toml`, CLI entry points, LICENSE, CI — only
    after live evidence.
 
 **Long runs are slow because** generation dominates (~20–50s/turn on bonsai-27b;
@@ -455,6 +527,10 @@ overnight; keep-awake is automatic.
 
 # deterministic P2 diagnostic on any run (no oracle; the real P2 evidence)
 .\.venv\Scripts\python -m experiments.retrieval_diagnostic runs/<ts>
+
+# model speed sweep (TTFT + eff/dec tps + reasoning-burn over all loaded models)
+.\.venv\Scripts\python -m experiments.model_probe            # all
+.\.venv\Scripts\python -m experiments.model_probe --model gemma --json runs/probe.json
 
 # offline check
 .\.venv\Scripts\python -m experiments.generate_data --mock --max-convs 5 --protocol
