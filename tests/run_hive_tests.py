@@ -53,6 +53,7 @@ INTELLIGENCE = [
     "tests/unit/test_ab_test.py",
     "tests/unit/test_ablation.py",
     "tests/unit/test_labeling.py",
+    "tests/unit/test_retrieval_diagnostic.py",
     "tests/integration/test_protocol.py",
     "tests/integration/test_p5_smoke.py",
     "tests/integration/test_oracle_pipeline.py",

@@ -655,6 +655,14 @@ def main(argv: list[str] | None = None) -> int:
     }
     db.close()
 
+    # Deterministic P2 (no oracle): measure retrieval against the fixture's own
+    # ground-truth answers. The oracle-based precision above is really a per-turn
+    # sufficiency rate (predicted_relevant is hardcoded True), so recall/eviction
+    # are trivial there; this is the white paper's actual labeled-chunk metric.
+    from experiments.retrieval_diagnostic import compute_retrieval_vs_fixture
+
+    retrieval_diagnostic = compute_retrieval_vs_fixture(records, conversations)
+
     # --- protocol + baselines (optional) ---
     protocol_report = None
     baseline_report = None
@@ -695,6 +703,7 @@ def main(argv: list[str] | None = None) -> int:
         "aggregate": _aggregate(records),
         "ground_truth": ground_truth_metrics,
         "post_run_pes": post_run_pes,
+        "retrieval_diagnostic": retrieval_diagnostic,
         "conversations": records,
         "protocol": protocol_report,
         "baselines": baseline_report,
@@ -708,6 +717,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  PES min/avg   : {agg.get('min_pes')} / {agg.get('avg_pes')}")
     if post_run_pes:
         print(f"  post-run PES : {post_run_pes['pes']} ({post_run_pes['band']})")
+    if retrieval_diagnostic.get("retrieval_recall") is not None:
+        print(f"  P2 recall    : {retrieval_diagnostic['retrieval_recall']}% "
+              f"(deterministic, fixture ground truth; "
+              f"retrievable-only: {retrieval_diagnostic['retrieval_recall_retrievable']}%)")
     print(f"  avg total ms  : {agg.get('avg_total_ms')}")
     print(f"  fifo fallbacks: {agg.get('fifo_fallbacks')}")
     if protocol_report:
