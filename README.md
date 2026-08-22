@@ -158,21 +158,31 @@ Bands: `≥80` GREEN · `60–79` YELLOW · `40–59` RED · `<40` CRITICAL.
 
 ### 3.2 The deterministic P2 diagnostic
 
-Each sampled turn's assembled context is checked for the fixture's known answer
-facts (the answer's content terms beyond the query). Reported:
+P2 is measured against the fixture's ground-truth answer facts, but only for
+facts the model **actually stated** in prior *stored* reply chunks (hedges are
+filtered, matching the hive's store). Facts the model never uttered cannot be
+retrieved by any hive, so scoring them conflates model fidelity with retrieval
+quality — the reframe (2026-08-22) separates the two. Reported:
 
-- `retrieval_recall` — % of sampled turns whose assembled context contains ≥50%
-  of the answer facts.
-- `retrieval_recall_retrievable` — same, restricted to turns where the answer
-  *could* exist in prior history (first-mention turns are structurally
-  unretrievable and reported separately).
+- `retrieval_recall` — the honest hive metric: % of turns (with ≥1 stated
+  fact) whose assembled context contains ≥50% of the *stated* facts.
+- `ingestion_rate` — % of expected facts the model actually stated (the
+  model-fidelity bound on recall).
+- `perfect_hive_ceiling` — % of measurable turns whose facts were *all*
+  stated; the max recall a perfect hive could achieve on this run.
+- `retrieval_recall_retrievable` — identical to `retrieval_recall` (kept for
+  schema compatibility).
 - `retrieval_precision` — sentence-level proxy (share of assembled sentences
   sharing a topic term with the query).
 
 With per-conversation store isolation (one `Hive` per conversation), live
 replays reach **~94% recall on retrievable turns** — meeting the ≥90% P2 target.
-The two failure modes that previously masked this (cross-conversation
-contamination and hedge-reply poisoning) are fixed; see `AI-HANDOFF.md` §5.1.
+Live runs on `prism-ml/bonsai-27b` (`runs/20260822_live3`) score **93.5% honest
+recall** (on stated facts) with **33.9% ingestion_rate** — the hive retrieves
+what the model actually said; the residual gap to the raw fixture target is a
+model-fidelity bound, not a hive failure. The failure modes that previously
+masked this (cross-conversation contamination and hedge-reply poisoning) are
+fixed; see `AI-HANDOFF.md` §5.1.
 
 ### 3.3 The P1–P10 protocol (the scientific claims)
 

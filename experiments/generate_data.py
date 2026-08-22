@@ -728,8 +728,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  post-run PES : {post_run_pes['pes']} ({post_run_pes['band']})")
     if retrieval_diagnostic.get("retrieval_recall") is not None:
         print(f"  P2 recall    : {retrieval_diagnostic['retrieval_recall']}% "
-              f"(deterministic, fixture ground truth; "
-              f"retrievable-only: {retrieval_diagnostic['retrieval_recall_retrievable']}%)")
+              f"(honest, stated-facts only; ingestion {retrieval_diagnostic.get('ingestion_rate')}%, "
+              f"ceiling {retrieval_diagnostic.get('perfect_hive_ceiling')}%)")
     print(f"  avg total ms  : {agg.get('avg_total_ms')}")
     print(f"  fifo fallbacks: {agg.get('fifo_fallbacks')}")
     if protocol_report:

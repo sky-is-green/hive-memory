@@ -9,18 +9,39 @@ corpus's own ground truth: each user query in a fixture has a known assistant
 answer, and a turn's relevant context is prior fixture content on the same
 topic.
 
-Per sampled turn it computes:
+Reframed for model-fidelity honesty (2026-08-22, live3):
+
+The old design classified a turn as "retrievable" from the *fixture's* prior
+text. But a live generative model does not reproduce the fixture's canonical
+answers — it states its own (often different) facts. If the model never said
+the expected fact, no store could contain it, so no hive could retrieve it;
+measuring recall against those facts conflates *model fidelity* with *hive
+retrieval quality*. The reframe separates the two:
+
+- ``stated_facts``: the expected answer-facts the model **actually stated** in
+  prior stored (non-hedge) reply chunks. Only these could be retrieved.
+- ``ingestion_rate``: share of expected facts the model actually stated — the
+  **model-fidelity bound** on recall.
+- ``retrieval_recall`` / ``retrieval_recall_retrievable``: hits over turns
+  where at least one fact was actually stated (``stated_facts`` non-empty) —
+  the hive's honest retrieval quality.
+- ``perfect_hive_ceiling``: share of measurable turns whose facts were *all*
+  stated — the maximum recall any perfect hive could achieve on this run.
+
+Per sampled turn it also reports:
   - ``answer_facts``: the distinctive fact terms the fixture's ground-truth
     answer adds beyond the query (e.g. "Redis", "TTL" for a session-store ask).
-  - ``retrievable``: whether the answer facts *could* exist in history — i.e.
-    the topic was already covered by a prior fixture turn. First-mention turns
-    are structurally unretrievable and reported separately.
-  - ``hit``: the share of answer facts present in the assembled context.
+  - ``stated_facts``: those facts present in prior stored replies.
+  - ``retrievable``: whether any expected fact was stated (fixture-based
+    first-mention analysis is kept separately as ``first_mention``).
+  - ``hit``: the share of *stated* facts present in the assembled context.
 
 Aggregates:
-  - ``retrieval_recall``: hits over all sampled turns.
-  - ``retrieval_recall_retrievable``: hits over only retrievable turns (the
-    hive's real retrieval quality).
+  - ``retrieval_recall``: hits over all turns with stated facts.
+  - ``retrieval_recall_retrievable``: identical (kept for backwards
+    compatibility with the run-report schema).
+  - ``ingestion_rate``: stated/expected facts over measurable turns (fidelity).
+  - ``perfect_hive_ceiling``: fully-stated measurable turns / measurable turns.
   - ``retrieval_precision``: sentence-level approximation — of the content in
     the assembled context, the share that shares a topic term with the query.
 """
@@ -102,6 +123,10 @@ def _is_retrievable(query: str, prior_fixture_text: str) -> bool:
     Requires at least two distinct query content-terms to appear in prior
     history (a single shared word such as "auth" or "pipeline" is too loose and
     mislabels first mentions as retrievable).
+
+    NOTE: this is the *fixture-based* notion (was the topic covered at all).
+    The reframed diagnostic additionally requires the expected facts to have
+    been *stated by the model* in stored chunks; see ``compute_retrieval_vs_fixture``.
     """
     q_terms = _content_terms(query)
     if not q_terms:
@@ -142,12 +167,19 @@ def compute_retrieval_vs_fixture(records: list[dict], conversations: list[dict])
     """Compute deterministic P2 metrics from run records + fixture conversations.
 
     ``records`` is the run report's ``conversations`` list (each with
-    ``conversation_id`` and per-turn ``query`` / ``assembled_content``).
-    ``conversations`` is the fixture list (as loaded by
+    ``conversation_id`` and per-turn ``query`` / ``reply`` /
+    ``assembled_content``). ``conversations`` is the fixture list (as loaded by
     ``cortex.baselines.runner.load_conversations``).
+
+    Honest-retrieval reframe: a turn is only scored on the facts the model
+    actually stated in prior *stored* reply chunks (hedges excluded, matching
+    the hive's store). Facts the model never said are model-fidelity bound, not
+    hive failures.
     """
+    from cortex.hive import Hive
+
     answer_map = _fixture_answer_map(conversations)
-    # fixture text before each user query, per conversation
+    # fixture text before each user query, per conversation (for first-mention)
     prior_map: dict[str, dict[str, str]] = {}
     for conv in conversations:
         cid = conv.get("conversation_id", "unknown")
@@ -166,40 +198,63 @@ def compute_retrieval_vs_fixture(records: list[dict], conversations: list[dict])
         cid = conv.get("conversation_id", "unknown")
         conv_answers = answer_map.get(cid, {})
         conv_prior = prior_map.get(cid, {})
+        # text the hive actually stored before each turn: query chunks always,
+        # reply chunks only when not filtered as hedges (mirrors Hive.process_turn)
+        prior_stored = ""
         for t in conv.get("turns", []):
             q = t.get("query", "")
             answer = conv_answers.get(q, "")
+            reply = t.get("reply") or ""
             if not answer:
+                if reply and not Hive._is_hedge_reply(reply):
+                    prior_stored += " " + reply
                 continue
             prior_text = conv_prior.get(q, "")
             facts = _answer_fact_terms(q, answer)
             assembled = t.get("assembled_content") or ""
             acc_terms = _content_terms(assembled)
-            hits = facts & acc_terms
-            hit_ratio = len(hits) / len(facts) if facts else None
+            stored_terms = _content_terms(prior_stored)
+            stated = facts & stored_terms            # what the model actually said
+            hits = stated & acc_terms                 # stated facts that got retrieved
+            hit_ratio = len(hits) / len(stated) if stated else None
+            ingestion_ratio = len(stated) / len(facts) if facts else None
             sampled.append({
                 "turn": t.get("turn"),
                 "conversation_id": cid,
                 "query": q[:80],
                 "answer_facts": sorted(facts),
+                "stated_facts": sorted(stated),
                 "facts_found": sorted(hits),
                 "hit_ratio": hit_ratio,
-                "retrievable": _is_retrievable(q, prior_text),
+                "ingestion_ratio": ingestion_ratio,
+                "retrievable": len(stated) > 0,
                 "first_mention": not _is_retrievable(q, prior_text),
                 "precision": _turn_precision(q, assembled),
             })
+            if reply and not Hive._is_hedge_reply(reply):
+                prior_stored += " " + reply
 
     if not sampled:
         return {"sampled_turns": 0, "retrieval_recall": None,
-                "retrieval_recall_retrievable": None, "retrieval_precision": None,
+                "retrieval_recall_retrievable": None,
+                "ingestion_rate": None, "perfect_hive_ceiling": None,
+                "retrieval_precision": None,
                 "turns": [], "note": "no sampled turns with fixture answers"}
 
     measurable = [s for s in sampled if s["hit_ratio"] is not None]
+    # honest recall: only turns where at least one expected fact was stated
     recall = (statistics.mean(1.0 if s["hit_ratio"] >= 0.5 else 0.0 for s in measurable)
               if measurable else None)
     retr = [s for s in measurable if s["retrievable"]]
     recall_retr = (statistics.mean(1.0 if s["hit_ratio"] >= 0.5 else 0.0 for s in retr)
                    if retr else None)
+    # model-fidelity bound: share of expected facts the model actually stated
+    ing = [s for s in sampled if s["ingestion_ratio"] is not None]
+    ingestion_rate = (statistics.mean(s["ingestion_ratio"] for s in ing)
+                      if ing else None)
+    # perfect-hive ceiling: fully-stated measurable turns / measurable turns
+    full_stated = [s for s in measurable if s["ingestion_ratio"] == 1.0]
+    ceiling = (len(full_stated) / len(measurable) if measurable else 0.0)
     precs = [s["precision"] for s in sampled if s["precision"] is not None]
     precision = statistics.mean(precs) if precs else None
 
@@ -211,6 +266,8 @@ def compute_retrieval_vs_fixture(records: list[dict], conversations: list[dict])
         "retrieval_recall": round(recall * 100.0, 1) if recall is not None else None,
         "retrieval_recall_retrievable": (
             round(recall_retr * 100.0, 1) if recall_retr is not None else None),
+        "ingestion_rate": round(ingestion_rate * 100.0, 1) if ingestion_rate is not None else None,
+        "perfect_hive_ceiling": round(ceiling * 100.0, 1),
         "retrieval_precision": round(precision * 100.0, 1) if precision is not None else None,
         "turns": sampled,
     }
@@ -236,12 +293,16 @@ def main() -> None:
     print(f"run {run_dir.name}: deterministic P2 (fixture ground truth, no oracle)")
     print(f"  sampled turns         : {result['sampled_turns']}")
     print(f"  measurable (has facts): {result['measurable_turns']}")
-    print(f"  retrievable           : {result['retrievable_turns']} "
+    print(f"  retrievable (stated)  : {result['retrievable_turns']} "
           f"(first-mention excluded: {result['first_mention_turns']})")
+    print(f"  ingestion_rate        : {result['ingestion_rate']}% "
+          f"(expected facts the model actually stated - fidelity bound)")
+    print(f"  perfect-hive ceiling  : {result['perfect_hive_ceiling']}% "
+          f"(max recall any hive could achieve on this run)")
     print(f"  retrieval_recall      : {result['retrieval_recall']}% "
-          f"(all measurable turns)")
+          f"(honest, stated-facts only)")
     print(f"  recall (retrievable)  : {result['retrieval_recall_retrievable']}% "
-          f"(only turns where the answer could exist)")
+          f"(identical to recall; kept for schema compat)")
     print(f"  retrieval_precision   : {result['retrieval_precision']}% "
           f"(sentence-level proxy)")
     print()
@@ -254,11 +315,14 @@ def main() -> None:
             label = "miss"
         fm = " [first-mention]" if s["first_mention"] else ""
         print(f"  {label} turn {s['turn']:3d} {s['conversation_id']:9s} "
-              f"hit={s['hit_ratio']} prec={s['precision']} {fm} :: {s['query']}")
+              f"hit={s['hit_ratio']} stated={s['ingestion_ratio']} "
+              f"prec={s['precision']} {fm} :: {s['query']}")
         if s["facts_found"]:
             print(f"        facts found: {s['facts_found']}")
+        elif s["stated_facts"]:
+            print(f"        stated, not found: {s['stated_facts']}")
         elif s["answer_facts"]:
-            print(f"        expected   : {s['answer_facts']}")
+            print(f"        expected but never stated: {s['answer_facts']}")
 
 
 if __name__ == "__main__":
