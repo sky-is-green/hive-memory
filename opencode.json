@@ -1,0 +1,16 @@
+﻿{
+  "$schema": "https://opencode.ai",
+  "watcher": {
+    "ignore": [
+      "**/venv/**",
+      "**/.venv/**",
+      "**/site-packages/**",
+      "**/*.dll",
+      "**/*.lib",
+      "**/*.safetensors",
+      "**/*.ndjson",
+      "**/.godot/**",
+      "**/exported/**"
+    ]
+  }
+}

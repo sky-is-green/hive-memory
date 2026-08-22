@@ -1,0 +1,106 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.hypothesis/
+
+# Python environment
+.env
+.venv/
+venv/
+env/
+.Python
+
+# Model weights (downloaded, not authored)
+models/
+*.pt
+*.pth
+*.safetensors
+*.bin
+*.gguf
+*.onnx
+
+# HuggingFace cache
+.cache/
+.huggingface/
+.cache/huggingface/
+
+# Embedding / vector caches
+*.npy
+*.npz
+cache/
+sieve/cache/
+*.h5
+
+# Trained / serialized artifacts
+*.pkl
+*.joblib
+*.ckpt
+*.safetensors.bak
+
+# Runtime state (context store, decay matrix, hive checkpoints)
+state/
+checkpoints/
+retention/state/
+*.jsonl
+
+# Databases (ground truth, vault)
+*.sqlite3
+*.sqlite
+*.db
+*.db-journal
+
+# Logs (rotated daily; never commit)
+logs/*.ndjson
+logs/*.json
+*.log
+
+# Ignore python virtual environments where torch/scipy live
+.venv/
+venv/
+env/
+site-packages/
+
+# Ignore heavy ML binaries, model weights, and data streams
+*.dll
+*.lib
+*.safetensors
+*.ndjson
+
+# Benchmark & report outputs (generated)
+benchmarks/results/
+reports/
+*.html
+*.png
+*.svg
+*.pdf
+
+# Generated test data (large synthetic conversations)
+tests/fixtures/generated/
+data/
+sample_data/
+
+# Generated data-generation runs (reports, logs, ground-truth DBs)
+runs/
+
+# Local runtime config (secrets / machine-specific)
+*.local.json
+config.local.*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~

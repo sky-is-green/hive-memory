@@ -1,0 +1,7 @@
+torch>=2.1.0
+sentence-transformers>=2.2.0
+transformers>=4.36.0
+numpy>=1.24.0
+scipy>=1.11.0
+requests>=2.31.0
+psutil>=5.9.0

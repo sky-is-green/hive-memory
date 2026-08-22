@@ -1,0 +1,2 @@
+# Development / test dependencies (installed in the venv alongside requirements.txt)
+pytest>=8.0

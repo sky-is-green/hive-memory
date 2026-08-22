@@ -1,0 +1,27 @@
+{
+  "domain": "code",
+  "description": "Targeted-masking / relevance-boost vocabulary for code-domain conversations. Chunks containing these terms get a relevance-score boost (default +0.15).",
+  "keywords": [
+    "def", "class", "import", "from", "return", "yield", "async", "await",
+    "lambda", "global", "nonlocal", "self", "super", "raise", "try", "except",
+    "finally", "with", "elif", "else", "for", "while", "break", "continue",
+    "pass", "function", "const", "let", "var", "export", "require", "module",
+    "fn", "impl", "trait", "struct", "enum", "match", "mut", "pub", "crate", "mod"
+  ],
+  "libraries": [
+    "numpy", "pandas", "torch", "tensorflow", "keras", "scikit", "react",
+    "redux", "godot", "flask", "django", "fastapi", "sqlalchemy", "alembic",
+    "redis", "celery", "requests", "asyncio", "pytest", "pydantic", "httpx"
+  ],
+  "structural": [
+    "signature", "schema", "class hierarchy", "interface", "endpoint",
+    "migration", "index", "foreign key", "middleware", "decorator",
+    "dependency injection", "monorepo", "kv-cache", "pagedattention",
+    "context window", "embedding", "cosine similarity", "rollback"
+  ],
+  "gatekeeper": [
+    "confidence", "gate", "audit", "drone", "reliability", "checkpoint",
+    "hive", "sieve", "membrane", "retention", "focal", "cortex", "oracle",
+    "remembrance", "decay", "dedup", "drift"
+  ]
+}

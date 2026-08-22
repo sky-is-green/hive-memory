@@ -1,0 +1,16 @@
+{
+  "domain": "general",
+  "description": "Fallback relevance vocabulary for non-code / prose conversations.",
+  "decision_terms": [
+    "decision", "agreed", "decided", "conclusion", "resolution", "plan",
+    "priority", "requirement", "milestone", "deadline", "timeline", "roadmap"
+  ],
+  "discussion_terms": [
+    "meeting", "discuss", "discussion", "proposal", "tradeoff", "consideration",
+    "review", "feedback", "stakeholder", "summary", "context", "follow-up"
+  ],
+  "risk_terms": [
+    "blocker", "risk", "concern", "issue", "impediment", "dependency",
+    "constraint", "open question", "unresolved"
+  ]
+}
