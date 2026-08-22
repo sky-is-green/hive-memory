@@ -15,10 +15,10 @@ FIXTURE = [
             {"role": "user", "content": "How should we handle session store?"},
             {"role": "assistant", "content": "Use Redis with TTL for session store."},
             {"role": "user", "content": "How should we handle pagination?"},
-            {"role": "assistant", "content": "Use cursor-based for pagination."},
+            {"role": "assistant", "content": "Use cursor-based for pagination in the REST API."},
             # Repeated ask: the answer now exists in prior history.
-            {"role": "user", "content": "Can we change how pagination works?"},
-            {"role": "assistant", "content": "Use cursor-based for pagination."},
+            {"role": "user", "content": "What would you recommend for pagination in our REST API?"},
+            {"role": "assistant", "content": "Use cursor-based for pagination in the REST API."},
         ],
     }
 ]
@@ -36,15 +36,15 @@ FIRST_MENTION_RECORD = {
 RETRIEVABLE_RECORD = {
     "conversation_id": "test_conv",
     "turns": [
-        {"turn": 2, "query": "Can we change how pagination works?",
-         "assembled_content": "Use cursor-based for pagination. Use Redis with TTL."},
+        {"turn": 2, "query": "What would you recommend for pagination in our REST API?",
+         "assembled_content": "Use cursor-based for pagination in the REST API. Use Redis with TTL."},
     ],
 }
 
 MISS_RECORD = {
     "conversation_id": "test_conv",
     "turns": [
-        {"turn": 3, "query": "Can we change how pagination works?",
+        {"turn": 3, "query": "What would you recommend for pagination in our REST API?",
          "assembled_content": "Only unrelated content about the order schema."},
     ],
 }
@@ -67,8 +67,13 @@ def test_is_retrievable_distinguishes_first_mention():
         "How should we handle session store?", ""  # no prior context
     )
     assert _is_retrievable(
-        "Can we change how pagination works?",
-        "Use Redis with TTL for session store. Use cursor-based for pagination.",
+        "What would you recommend for pagination in our REST API?",
+        "Use cursor-based for pagination. The REST API returns JSON responses.",
+    )
+    # A single shared generic term is not enough to mark a turn retrievable.
+    assert not _is_retrievable(
+        "How should we handle auth service sessions?",
+        "We should use Redis for the order schema cache.",
     )
 
 

@@ -97,12 +97,17 @@ def _fixture_answer_map(conversations: list[dict]) -> dict[str, dict[str, str]]:
 
 def _is_retrievable(query: str, prior_fixture_text: str) -> bool:
     """A turn is retrievable when its topic was already covered before it was
-    asked — otherwise the answer could not exist in history (first mention)."""
+    asked — otherwise the answer could not exist in history (first mention).
+
+    Requires at least two distinct query content-terms to appear in prior
+    history (a single shared word such as "auth" or "pipeline" is too loose and
+    mislabels first mentions as retrievable).
+    """
     q_terms = _content_terms(query)
     if not q_terms:
         return True
     prior = _content_terms(prior_fixture_text)
-    return bool(q_terms & prior)
+    return len(q_terms & prior) >= 2
 
 
 def _answer_fact_terms(query: str, answer: str) -> set[str]:

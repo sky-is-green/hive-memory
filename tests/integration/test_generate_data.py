@@ -103,3 +103,56 @@ def test_run_lock_live_foreign_pid_refused(tmp_path, monkeypatch):
     (tmp_path / "run.lock").write_text("12345")
     monkeypatch.setattr(generate_data, "_pid_alive", lambda pid: pid == 12345)
     assert _acquire_run_lock(tmp_path) is False
+
+
+def test_per_conversation_store_isolation(tmp_path):
+    """Chunks from one conversation must not leak into another.
+
+    A benchmark run over many conversations shares one Hive; without a
+    per-conversation reset, later conversations retrieve mostly *other*
+    conversations' chunks, collapsing P2 precision. This regression test runs
+    two conversations and asserts the second one's context store contains no
+    first-conversation content.
+    """
+    import os
+
+    from cortex.config import HiveConfig
+    from cortex.e2e import FakeUltraSmall, MockTransport
+    from cortex.hive import Hive
+    from backend.lmstudio import LMStudioBackend
+    from cortex.baselines.runner import load_conversations
+
+    convs = load_conversations("tests/fixtures/generated")
+    # edge_001 is about the order schema; edge_002 about the deploy pipeline.
+    first = next(c for c in convs if c["conversation_id"] == "edge_001")
+    second = next(c for c in convs if c["conversation_id"] == "edge_002")
+
+    config = HiveConfig(confidence_mode="off", sanitize_context=False)
+    hive = Hive(
+        config=config,
+        ultra=FakeUltraSmall(),
+        medium=__import__("sieve.medium", fromlist=["MediumDrone"]).MediumDrone(
+            score_pair_fn=lambda q, c: 0.5
+        ),
+        backend=LMStudioBackend(base_url="http://localhost:1234", transport=MockTransport()),
+    )
+
+    # Conversation 1 fills the store with order-schema chunks.
+    for td in first["turns"]:
+        if td.get("role") != "user":
+            continue
+        hive.process_turn(td["content"])
+    first_chunks = [c.content for c in hive.store.all_chunks()]
+    assert first_chunks and "order schema" in " ".join(first_chunks).lower()
+
+    # Conversation 2 starts from a fresh store: no order-schema content.
+    hive.reset_conversation()
+    for td in second["turns"]:
+        if td.get("role") != "user":
+            continue
+        hive.process_turn(td["content"])
+    second_chunks = [c.content for c in hive.store.all_chunks()]
+    assert second_chunks
+    joined = " ".join(second_chunks).lower()
+    assert "order schema" not in joined
+    assert "blue-green" in joined

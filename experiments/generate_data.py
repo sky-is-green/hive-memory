@@ -212,6 +212,13 @@ def _run_conversations(hive, conversations, max_turns, conversation_id=None,
 
     for ci in range(start_conv, conv_total):
         conv = conversations[ci]
+        # Per-conversation store isolation: reset before every conversation
+        # EXCEPT a mid-conversation resume, whose store was restored from the
+        # checkpoint and must keep the partial conversation's chunks. Without
+        # this reset, one Hive/store across all conversations lets chunks from
+        # earlier conversations crowd out the current one's relevant context.
+        if not (resume is not None and ci == start_conv and current_record is not None):
+            hive.reset_conversation()
         if ci == start_conv and current_record is not None:
             conv_record = current_record
         else:

@@ -99,6 +99,21 @@ class Hive:
         self._warned_reasoning_starve = False
 
     # ------------------------------------------------------------------
+    def reset_conversation(self) -> None:
+        """Start a fresh conversation context.
+
+        Clears the store and resets the turn counter so one conversation's
+        chunks never leak into the next. Without this, a benchmark run over
+        many conversations shares one store, so late conversations retrieve
+        mostly *other* conversations' chunks (cross-conversation
+        contamination) and P2 precision collapses.
+        """
+        self.store = ContextStore(
+            embed_fn=self.ultra.embed, max_chunks=self.config.max_chunks
+        )
+        self.turn = 0
+
+    # ------------------------------------------------------------------
     def process_turn(
         self, query: str, conversation_id: Optional[str] = None, record_exchange: bool = True
     ) -> TurnResult:
