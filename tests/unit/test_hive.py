@@ -78,6 +78,47 @@ def test_hedge_filter_can_be_disabled():
     assert h.store.count() == 2  # query + (non-hedge) reply both stored
 
 
+def test_hedge_contraction_variants_caught():
+    """'don't have access' / 'can't provide' refusals must be caught even though
+    the markers use 'do not have' / 'cannot' (contraction normalization)."""
+    cases = [
+        "I don't have access to your specific deployment pipeline or repository.",
+        "I don't have access to specific code from a log pipeline.",
+        "I can't provide the exact implementation without more context.",
+        "I can't show you your actual canary-handling code.",
+        "Based on the context provided, I don't have specific information about your pipeline.",
+    ]
+    for c in cases:
+        assert Hive._is_hedge_reply(c), f"should be hedge: {c!r}"
+
+
+def test_hedge_lead_anchored_mid_reply_caveat_not_hedge():
+    """A factual reply that merely mentions it lacks specifics mid-text must NOT
+    be filtered: it carries facts. Refusals announce themselves at the start."""
+    factual = (
+        "To recommend the best **log levels** for your log pipeline, it's "
+        "important to understand what kind of data is being logged. Since I "
+        "don't have specific details about your setup, here's a general "
+        "framework you can use: DEBUG for development, INFO in production..."
+    )
+    assert not Hive._is_hedge_reply(factual)
+    # but the same signal at the START is a hedge
+    assert Hive._is_hedge_reply(
+        "I don't have specific details about your setup, so I cannot recommend log levels."
+    )
+
+
+def test_hedge_factual_context_openers_not_filtered():
+    """'Based on the context provided, here is a recommendation' replies are
+    factual (they answer), even though they open with the same boilerplate
+    as the live refusals."""
+    factual = (
+        "Based on the provided context, here is a comprehensive walkthrough "
+        "for implementing a consistent error envelope in your REST API."
+    )
+    assert not Hive._is_hedge_reply(factual)
+
+
 def test_no_backend_mode():
     h = _hive()
     r = h.process_turn("q")

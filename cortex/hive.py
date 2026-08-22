@@ -183,6 +183,54 @@ class Hive:
         )
 
     # ------------------------------------------------------------------
+    # Refusal/hedge detection. Markers must fire in the *opening* of the reply
+    # (LEAD_WINDOW chars): refusals announce themselves up front ("Based on the
+    # provided context, there is no information regarding...", "I don't have
+    # access to..."). A mid-reply caveat in an otherwise factual answer ("I
+    # don't have specific details about your setup, here's a general framework")
+    # must NOT be treated as a hedge — it carries facts.
+    _HEDGE_MARKERS = (
+        "no information",
+        "no specific information",
+        "no information available",
+        "cannot fulfill",
+        "i cannot",
+        "cannot show",
+        "cannot provide",
+        "unable to fulfill",
+        "unable to provide",
+        "do not have access",
+        "does not provide",
+        "does not contain",
+        "no access to",
+        "do not have the",
+        "i do not have",
+        "i am not able",
+        "i am unable",
+        "no record of",
+    )
+    # Normalize contractions so "I don't have access" / "I can't provide" match
+    # the "do not have" / "cannot" markers above.
+    _HEDGE_CONTRACTIONS = {
+        "don't": "do not",
+        "don’t": "do not",
+        "can't": "cannot",
+        "can’t": "cannot",
+        "couldn't": "could not",
+        "couldn’t": "could not",
+        "wouldn't": "would not",
+        "wouldn’t": "would not",
+        "i'm": "i am",
+        "i’m": "i am",
+        "i've": "i have",
+        "i’ve": "i have",
+        "won't": "will not",
+        "won’t": "will not",
+        "it's": "it is",
+        "it’s": "it is",
+    }
+    _HEDGE_LEAD_WINDOW = 90
+
     @staticmethod
     def _is_hedge_reply(reply: str) -> bool:
         """Detect refusal/hedge replies that must not be stored as context.
@@ -192,21 +240,20 @@ class Hive:
         retrieved *as context* for the same topic, so the model sees its own
         refusal instead of a fact, and keeps refusing. Filtering keeps the
         store fact-bearing (query chunks still record what was asked).
+
+        Detection is **lead-anchored**: markers are matched only against the
+        opening of the reply (after contraction normalization), because a
+        refusal always announces itself at the start, whereas a factual reply
+        may contain an incidental "I don't have specific details about your
+        setup" caveat mid-text and must still be stored.
         """
         t = (reply or "").strip().lower()
         if not t:
             return True  # empty replies carry no facts
-        markers = (
-            "no information",
-            "no specific information",
-            "no information available",
-            "cannot fulfill",
-            "i cannot",
-            "unable to fulfill",
-            "do not have access",
-            "does not provide",
-        )
-        return any(m in t for m in markers)
+        for short, long in Hive._HEDGE_CONTRACTIONS.items():
+            t = t.replace(short, long)
+        lead = t[: Hive._HEDGE_LEAD_WINDOW]
+        return any(m in lead for m in Hive._HEDGE_MARKERS)
 
     def _fifo_context(self, query: str) -> str:
         history = [{"role": "user", "content": c.content} for c in self.store.all_chunks()]

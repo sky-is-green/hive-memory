@@ -245,6 +245,23 @@ naming). `__init__.py` files exist for all packages.
     strict prefix forces hedge → hedge stored → hedge retrieved later as
     "context" → model keeps refusing.** Both halves (ingestion + retrieval) are
     now addressed.
+15b. **Hedge filter is lead-anchored + contraction-normalized (2026-08-22).**
+    Live3 audit found the marker filter was (a) missing contractions —
+    `"I don't have access"` / `"I can't show you"` slipped through because the
+    markers only read `"do not have"` / `"cannot"` — and (b) prone to false
+    positives if markers fired anywhere in the reply (a factual answer's
+    mid-text "I don't have specific details about your setup" caveat was
+    filtered). Fix: `Hive._is_hedge_reply` normalizes contractions
+    (don't→do not, can't→cannot, i'm→i am, …) and matches markers **only against
+    the first 90 chars** — refusals announce themselves up front, factual
+    replies with an incidental caveat still get stored. Validated against all
+    136 live3 replies: 11 true hedges caught (including the 4 contraction
+    refusals that had been polluting the store), 0 false positives (the 5
+    "Based on the context provided, here is a recommendation…" factual openers
+    are correctly kept). New unit tests:
+    `test_hedge_contraction_variants_caught`,
+    `test_hedge_lead_anchored_mid_reply_caveat_not_hedge`,
+    `test_hedge_factual_context_openers_not_filtered`.
 16. **Live model probe (2026-08-22):** `enable_thinking=false` is **ignored by
     every qwen variant** loaded in LM Studio (they burn the whole output budget on
     reasoning: `qwen3.6-35b-a3b-apex-mtp` reason=200/200 with empty visible
