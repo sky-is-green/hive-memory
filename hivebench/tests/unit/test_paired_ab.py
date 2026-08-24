@@ -92,6 +92,11 @@ def test_strict_hive_win_when_fifo_drops_the_fact():
     assert m["strict_hive_only_ratio"] == 100.0
     assert m["hive_avg_fact_hit_ratio"] == 1.0
     assert m["fifo_avg_fact_hit_ratio"] == 0.0
+    # Context fidelity: the hive answer's terms came from its own context;
+    # the FIFO arm had nothing to draw on.
+    assert m["hive_avg_context_fidelity"] > 0.0
+    assert m["fifo_avg_context_fidelity"] == 0.0
+    assert m["fidelity_hive_gt_fifo_ratio"] == 100.0
 
 
 def test_fifo_catches_up_with_full_window():
@@ -160,3 +165,36 @@ def test_main_missing_corpus(tmp_path):
     from experiments.paired_ab import main
 
     assert main(["--mock", "--conversations", str(tmp_path / "none")]) == 2
+
+
+def test_checkpoint_and_resume(tmp_path):
+    convs = _conv()
+    ultra, medium = _ultra()
+    ckpt = tmp_path / "ckpt.json"
+    report = run_paired(convs, _ContextAwareBackend(convs), ultra, medium,
+                        fifo_budget=1, checkpoint_path=ckpt, checkpoint_every=1)
+    assert report["metrics"]["turns_compared"] == 1
+    saved = json.loads(ckpt.read_text(encoding="utf-8"))
+    # fidelity_* is computed after the loop, so it is absent from checkpoints
+    strip = lambda r: {k: v for k, v in r.items() if not k.startswith("fidelity")}
+    assert [strip(r) for r in saved["rows"]] == [strip(r) for r in report["turns"]]
+
+    # Resume with an empty-ish run: turn_index already covers the only turn,
+    # so no new rows are produced and the prior rows are preserved.
+    resumed = run_paired(convs, _ContextAwareBackend(convs), ultra, medium,
+                         fifo_budget=1, checkpoint_path=tmp_path / "ckpt2.json",
+                         checkpoint_every=1, resume=saved)
+    assert resumed["turns"] == report["turns"]
+    assert resumed["metrics"]["turns_compared"] == 1
+
+    # A resume mid-conversation skips completed turns without dropping rows.
+    saved["conv_index"] = 0
+    saved["turn_index"] = 2
+    saved["prior"] = []
+    saved["store"] = {"chunks": {}, "turn_counts": {}}
+    saved["rows"] = []
+    resumed2 = run_paired(convs, _ContextAwareBackend(convs), ultra, medium,
+                          fifo_budget=1, checkpoint_path=tmp_path / "ckpt3.json",
+                          checkpoint_every=1, resume=saved)
+    assert resumed2["turns"] == []
+    assert resumed2["turns_compared"] == 0

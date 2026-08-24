@@ -27,6 +27,24 @@ from sieve.vocabulary import Vocabulary
 COSINE_EPS = 1e-9
 
 
+def _guard_pyarrow_parquet() -> None:
+    """Workaround for hosts whose AppControl/WDAC policy blocks pyarrow's
+    parquet DLL (``_parquet.pyd``): sentence-transformers 6.x imports
+    ``datasets`` unconditionally at package import time, and ``datasets``
+    imports ``pyarrow.parquet`` at module level — even though inference never
+    touches parquet. When the real module cannot load, a stub keeps the import
+    chain alive. Machines without the policy block are unaffected (the real
+    module wins)."""
+    import sys
+    import types
+
+    try:
+        import pyarrow.parquet  # noqa: F401
+    except ImportError:
+        if "pyarrow.parquet" not in sys.modules:
+            sys.modules["pyarrow.parquet"] = types.ModuleType("pyarrow.parquet")
+
+
 def cosine_similarity_rows(query: np.ndarray, rows: np.ndarray) -> np.ndarray:
     """Cosine similarity between one query vector and each row of ``rows``."""
     dots = rows @ query
@@ -67,6 +85,7 @@ class UltraSmallDrone:
     def _ensure_loaded(self) -> None:
         if self._encode is not None:
             return
+        _guard_pyarrow_parquet()
         from sentence_transformers import SentenceTransformer
 
         self._model = SentenceTransformer(self._model_name, device=self._device)

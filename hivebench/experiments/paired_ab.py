@@ -86,8 +86,17 @@ def _answer_fact_scoring(facts, *texts):
 
 def run_paired(conversations, backend, ultra, medium, sampling=None,
                max_turns=None, fifo_budget: int = FIFO_WINDOW_TOKENS,
-               queen=None) -> dict:
-    """Run the paired A/B and return the report dict (metrics + per-turn rows)."""
+               queen=None, verbose: bool = False,
+               checkpoint_path: str | Path | None = None,
+               checkpoint_every: int = 5,
+               resume: dict | None = None) -> dict:
+    """Run the paired A/B and return the report dict (metrics + per-turn rows).
+
+    Long live runs can be resumed: ``checkpoint_path`` writes a JSON checkpoint
+    every ``checkpoint_every`` user turns and at each conversation boundary;
+    ``resume`` (a loaded checkpoint dict) skips completed conversations/turns
+    and restores the current conversation's store and prior history.
+    """
     from experiments.retrieval_diagnostic import (
         _answer_fact_terms,
         _fixture_answer_map,
@@ -96,20 +105,43 @@ def run_paired(conversations, backend, ultra, medium, sampling=None,
 
     ans = _fixture_answer_map(conversations)
 
-    assembler = ContextAssembler()
-    rows: list[dict] = []
-    first_mention = 0
-    no_facts = 0
+    def save_checkpoint(ci, turn_index, store, prior):
+        if checkpoint_path is None:
+            return
+        Path(checkpoint_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(checkpoint_path).write_text(json.dumps({
+            "version": 1,
+            "conv_index": ci,
+            "turn_index": turn_index,
+            "prior": prior,
+            "store": store.to_dict(),
+            "rows": rows,
+        }, indent=2, default=str), encoding="utf-8")
 
-    for conv in conversations:
+    assembler = ContextAssembler()
+    rows = list(resume.get("rows", [])) if resume else []
+    first_mention = resume.get("first_mention", 0) if resume else 0
+    no_facts = resume.get("no_facts", 0) if resume else 0
+    done_turns = resume.get("done_turns", 0) if resume else 0
+
+    for ci, conv in enumerate(conversations):
+        if resume is not None and ci < resume.get("conv_index", 0):
+            continue
         cid = conv.get("conversation_id", "unknown")
         conv_answers = ans.get(cid, {})
         store = ContextStore(embed_fn=ultra.embed)
+        if resume is not None and ci == resume.get("conv_index", 0):
+            store = ContextStore.from_dict(resume["store"], embed_fn=ultra.embed)
         turn = 0
         prior_parts: list[str] = []
+        if resume is not None and ci == resume.get("conv_index", 0):
+            prior_parts = list(resume.get("prior", []))
         for td in conv.get("turns", []):
             if td.get("role") == "user":
                 turn += 1
+                if resume is not None and ci == resume.get("conv_index", 0) \
+                        and turn <= resume.get("turn_index", 0):
+                    continue
                 if max_turns and turn > max_turns:
                     break
                 q = td["content"]
@@ -125,6 +157,8 @@ def run_paired(conversations, backend, ultra, medium, sampling=None,
                     # convention — no LLM call is spent on unscorable turns).
                     stored_reply = answer
                 else:
+                    if verbose:
+                        print(f"  turn {turn} [{cid}] hive vs fifo ...", flush=True)
                     hive_ctx = assembler.assemble(
                         query=q, current_turn=turn, store=store,
                         router=DroneRouter(), ultra_small=ultra, medium=medium,
@@ -151,6 +185,8 @@ def run_paired(conversations, backend, ultra, medium, sampling=None,
                         "query": q,
                         "hive_ctx_tokens": estimate_tokens(hive_ctx),
                         "fifo_ctx_tokens": estimate_tokens(fifo_ctx),
+                        "hive_ctx": hive_ctx[:2000],
+                        "fifo_ctx": fifo_ctx[:2000],
                         "ctx_hive_suff": ctx_h_suff,
                         "ctx_fifo_suff": ctx_f_suff,
                         "answer_hive_hit_ratio": round(ans_h_hit, 3),
@@ -184,8 +220,14 @@ def run_paired(conversations, backend, ultra, medium, sampling=None,
                 if stored_reply and not Hive._is_hedge_reply(stored_reply):
                     store.add_chunk(turn, stored_reply)
                 prior_parts.append(td.get("content", "") or "")
+                done_turns += 1
+                if checkpoint_path is not None and done_turns % checkpoint_every == 0:
+                    save_checkpoint(ci, turn, store, prior_parts)
             else:
                 prior_parts.append(td.get("content", "") or "")
+        # conversation boundary checkpoint: next conv starts fresh
+        if checkpoint_path is not None:
+            save_checkpoint(ci + 1, 0, store, [])
 
     n = len(rows)
     if n == 0:
@@ -196,6 +238,21 @@ def run_paired(conversations, backend, ultra, medium, sampling=None,
             "metrics": {},
             "turns": [],
         }
+
+    from experiments.retrieval_diagnostic import _content_terms
+
+    def _fidelity(reply: str, ctx: str) -> float:
+        """Share of the answer's distinctive terms that came from its own
+        context — isolates the curation's contribution to the answer."""
+        r_terms = _content_terms(reply or "")
+        if not r_terms:
+            return 0.0
+        c_terms = _content_terms(ctx or "")
+        return len(r_terms & c_terms) / len(r_terms)
+
+    for r in rows:
+        r["fidelity_hive"] = round(_fidelity(r["reply_hive"], r["hive_ctx"]), 3)
+        r["fidelity_fifo"] = round(_fidelity(r["reply_fifo"], r["fifo_ctx"]), 3)
 
     hive_only = fifo_only = both = neither = 0
     ctx_hive_only = ctx_fifo_only = ctx_both = ctx_neither = 0
@@ -232,6 +289,14 @@ def run_paired(conversations, backend, ultra, medium, sampling=None,
         "fifo_answer_recall": round(ans_recall_f * 100.0, 1),
         "hive_avg_fact_hit_ratio": round(avg_hit_h, 3),
         "fifo_avg_fact_hit_ratio": round(avg_hit_f, 3),
+        "hive_avg_context_fidelity": round(
+            sum(r["fidelity_hive"] for r in rows) / n, 3),
+        "fifo_avg_context_fidelity": round(
+            sum(r["fidelity_fifo"] for r in rows) / n, 3),
+        "fidelity_hive_gt_fifo_ratio": round(
+            sum(1 for r in rows if r["fidelity_hive"] > r["fidelity_fifo"]) / n * 100.0, 1),
+        "fidelity_hive_ge_fifo_ratio": round(
+            sum(1 for r in rows if r["fidelity_hive"] >= r["fidelity_fifo"]) / n * 100.0, 1),
         "hive_only": hive_only,
         "fifo_only": fifo_only,
         "both_sufficient": both,
@@ -302,6 +367,36 @@ def main(argv: list[str] | None = None) -> int:
         "--fifo-budget", type=int, default=FIFO_WINDOW_TOKENS,
         help="FIFO window size in tokens (default %(default)s)",
     )
+    parser.add_argument(
+        "--confidence", choices=("mcdropout", "single", "off"), default="mcdropout",
+        help="drone confidence mode; 'off' skips the MC-dropout passes (the stock "
+             "embedding model yields confidence ~1.0 regardless)",
+    )
+    parser.add_argument(
+        "--max-tokens", type=int, default=None,
+        help="cap both arms' reply length (default: uncapped). On reasoning "
+             "models a small cap yields empty replies unless --no-thinking is "
+             "used; the fixture-fact scoring only needs the facts named",
+    )
+    parser.add_argument(
+        "--no-thinking", action="store_true",
+        help="send enable_thinking=false with every request, so reasoning models "
+             "skip chain-of-thought (faster, and reply caps stop yielding empty "
+             "output). Combine with LM Studio's 'thinking' toggle for models "
+             "that only honor the GUI setting.",
+    )
+    parser.add_argument(
+        "--checkpoint-every", type=int, default=5,
+        help="write a resume checkpoint every N user turns",
+    )
+    parser.add_argument(
+        "--checkpoint", default="",
+        help="resume-checkpoint output path (default: <output>.ckpt.json)",
+    )
+    parser.add_argument(
+        "--resume", default="",
+        help="resume a checkpoint file written by a previous (killed) run",
+    )
     args = parser.parse_args(argv)
 
     if args.provider:
@@ -332,11 +427,12 @@ def main(argv: list[str] | None = None) -> int:
                                   transport=MockTransport())
         live = False
     else:
-        ultra = UltraSmallDrone()
+        ultra = UltraSmallDrone(confidence_mode=args.confidence)
         ultra._ensure_loaded()
         backend = LMStudioBackend(base_url=args.base_url, model=args.model,
                                   api_key=pkw.get("api_key", "lm-studio"),
-                                  extra_headers=pkw.get("extra_headers"))
+                                  extra_headers=pkw.get("extra_headers"),
+                                  disable_thinking=args.no_thinking)
         if not backend.health():
             print(f"LM Studio not reachable at {args.base_url}")
             return 3
@@ -350,10 +446,39 @@ def main(argv: list[str] | None = None) -> int:
                           {"sufficient": True, "used_pieces": [], "missing": [],
                            "score": 4})))
     sampling = parse_sampling(args.sampling) if args.sampling else None
+    if args.max_tokens:
+        sampling = {**(sampling or {}), "max_tokens": args.max_tokens}
+
+    from experiments.dashboard import KeepAwake
+
+    keep_awake = KeepAwake() if live else None
+    if keep_awake is not None and keep_awake.active:
+        print("keep-awake: system sleep disabled for this run (ES_SYSTEM_REQUIRED)")
+
+    resume = None
+    if args.resume:
+        ckpt_path = Path(args.resume)
+        if not ckpt_path.exists():
+            print(f"no checkpoint found at {args.resume}")
+            return 3
+        resume = json.loads(ckpt_path.read_text(encoding="utf-8"))
+        print(f"resuming from {args.resume}: conv "
+              f"{resume.get('conv_index', 0) + 1}, turn {resume.get('turn_index', 0)}, "
+              f"{len(resume.get('rows', []))} rows done")
 
     report = run_paired(conversations, backend, ultra, medium, sampling=sampling,
                         max_turns=args.max_turns, fifo_budget=args.fifo_budget,
-                        queen=queen)
+                        queen=queen, verbose=True,
+                        checkpoint_path=(
+                            Path(args.checkpoint) if args.checkpoint else
+                            (Path(args.output) if args.output else
+                             Path("logs") / "paired_ab.json").with_suffix(".ckpt.json")
+                        ),
+                        checkpoint_every=args.checkpoint_every,
+                        resume=resume)
+
+    if keep_awake is not None:
+        keep_awake.close()
 
     out = Path(args.output) if args.output else Path("logs") / "paired_ab.json"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -374,6 +499,11 @@ def main(argv: list[str] | None = None) -> int:
           f"(fixture-fact presence in replies)")
     print(f"  avg fact hit ratio  : hive {m['hive_avg_fact_hit_ratio']} "
           f"vs FIFO {m['fifo_avg_fact_hit_ratio']}")
+    print(f"  context fidelity    : hive {m['hive_avg_context_fidelity']} "
+          f"vs FIFO {m['fifo_avg_context_fidelity']} "
+          f"(answer terms sourced from the arm's own context)")
+    print(f"  fidelity hive > FIFO: {m['fidelity_hive_gt_fifo_ratio']}% of turns "
+          f"(>= {m['fidelity_hive_ge_fifo_ratio']}%)")
     print(f"  hive >= FIFO answers: {m['hive_ge_fifo_ratio']}% "
           f"(strict hive-only {m['strict_hive_only_ratio']}%)")
     print(f"  answer buckets      : hive_only {m['hive_only']} / "
