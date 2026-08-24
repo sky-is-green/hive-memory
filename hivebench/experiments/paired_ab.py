@@ -108,15 +108,32 @@ def run_paired(conversations, backend, ultra, medium, sampling=None,
     def save_checkpoint(ci, turn_index, store, prior):
         if checkpoint_path is None:
             return
-        Path(checkpoint_path).parent.mkdir(parents=True, exist_ok=True)
-        Path(checkpoint_path).write_text(json.dumps({
+        ckpt_path = Path(checkpoint_path)
+        ckpt_path.parent.mkdir(parents=True, exist_ok=True)
+        ckpt_path.write_text(json.dumps({
             "version": 1,
             "conv_index": ci,
             "turn_index": turn_index,
             "prior": prior,
             "store": store.to_dict(),
             "rows": rows,
+            "first_mention": first_mention,
+            "no_facts": no_facts,
+            "done_turns": done_turns,
         }, indent=2, default=str), encoding="utf-8")
+        # A killed run should still leave readable partial results: mirror the
+        # final report shape (minus fidelity, computed only at the end) beside
+        # the checkpoint.
+        partial = {
+            "partial": True,
+            "turns_compared": len(rows),
+            "first_mention_excluded": first_mention,
+            "no_facts_excluded": no_facts,
+            "turns": rows,
+        }
+        if ckpt_path.name.endswith(".ckpt.json"):
+            report_path = ckpt_path.with_name(ckpt_path.name[: -len(".ckpt.json")] + ".json")
+            report_path.write_text(json.dumps(partial, indent=2), encoding="utf-8")
 
     assembler = ContextAssembler()
     rows = list(resume.get("rows", [])) if resume else []
