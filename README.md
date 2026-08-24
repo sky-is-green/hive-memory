@@ -39,12 +39,19 @@ quality. The head-to-head evidence above is what the claims rest on.*
 
 - **Bounded cost, always.** The hive caps the context window regardless of
   conversation length (adaptive budget: 1–3k tokens live), so per-turn cost and
-  generation time stay flat instead of growing with history.
+  generation time stay flat instead of growing with history. And because KV
+  compression is a *precision* axis while curation is a *selection* axis, the
+  savings compound rather than compete: paired with a TurboQuant-class KV
+  quantizer (~3–4 bits, near-zero loss), a hive-curated context makes a
+  50k-token conversation's cache ~150× smaller than raw history — selection
+  multiplies precision on the surviving tokens (white paper §1.6).
 - **It drops in around your existing backend.** Any OpenAI-compatible endpoint
   (LM Studio, llama.cpp, vLLM, hosted APIs) works — no model retraining, no
   prompt rewrites; the harness exposes it as a drop-in API.
 - **Runs on consumer hardware.** The drones are small CPU models (~60 MB,
-  ~5 ms/query, no GPU required) — verified on an AMD-only rig with no NVIDIA.
+  ~5 ms/query, no GPU required) — verified on an AMD-only rig with no NVIDIA,
+  where FP8-attention paths don't exist (the exact gap TurboQuant-class KV
+  quantization fills).
 - **The efficiency gap is measured, not claimed:**
 
 | Metric | Hive | Status quo (FIFO/rolling window) |
@@ -57,6 +64,9 @@ quality. The head-to-head evidence above is what the claims rest on.*
 | Added latency per turn | **~18 ms** | 0 (but loses the facts) |
 | Stability (500-turn run) | **0 OOM**, peak RSS 34.7 MB | — |
 
+All numbers are the live runs recorded in the white paper's measured-outcome
+table (§8); PES is defined in §6.
+
 ## Why HiveBench
 
 Most evaluation harnesses tell you how a model performs in a sandbox. HiveBench
@@ -64,25 +74,41 @@ tells you *whether the context you feed the model is the reason it works* — an
 it does it deterministically, offline, and replayably:
 
 - **Falsifiable, not vibes.** The white paper's P1–P12 predictions ship as
-  executable tests with measured PASS/FAIL verdicts. Every number in this README
-  is reproduced by a command in the repo.
+  executable tests with measured PASS/FAIL verdicts (§8). Every number in this
+  README is reproduced by a command in the repo.
 - **No LLM-as-judge circularity in the evidence path.** The deterministic
   diagnostics score fact presence against fixture ground truth — stated-facts
-  recall, first-mention exclusion, hedge filtering. The queen's verdicts are
-  corroboration, never the evidence.
-- **The full suite runs offline in ~30 seconds** — no LLM, no GPU, no API keys.
-  400+ tests grouped by what they measure (`speed`, `intelligence`, `skills`,
-  `maximum`), plus a `--mock` mode for CI.
+  recall, first-mention exclusion, hedge filtering. **The Hive queen** — an
+  asynchronous ground-truth layer that labels, after each turn, whether the
+  assembled context was actually sufficient for the query — corroborates that
+  evidence; because it shares the served model's biases, it never constitutes
+  it (§9, Threat 1).
+- **The full test suite runs offline in ~30 seconds** — no LLM calls and no API
+  keys; CI-friendly via `--mock`. 400+ tests grouped by what they measure
+  (`speed`, `intelligence`, `skills`, `maximum`). (Running the system *live*
+  does require a local model backend — LM Studio / llama.cpp — which on most
+  rigs means a GPU; the drones themselves stay on CPU.)
 - **Paired head-to-head A/B** (`hivebench-ab`): the same turns, the same model,
   hive-curated context vs the naive FIFO window — both answers scored
-  deterministically (fixture-fact presence + context fidelity). This is the
-  comparison every other harness skips.
+  deterministically (fixture-fact presence + context fidelity), with both
+  arms' stores replaying identical history so the comparison isolates
+  selection. The scoring path is unit-tested; interim live results are
+  recorded per run under `runs/`.
 - **Built for long evidence runs.** Checkpointed, resumable live runs survive
-  crashes and reboots; one-command CLIs (`hivebench`, `hivebench-protocol`,
-  `hivebench-diagnostic`, …) and a self-healing runner for overnight runs.
+  crashes and reboots:
+
+  ```powershell
+  .\.venv\Scripts\python -m experiments.paired_ab --live --model prism-ml/bonsai-27b --max-turns 45 --fifo-budget 1500 --checkpoint-every 2 --output runs/paired_ab.json
+  # killed mid-run? relaunch with --resume runs/paired_ab_trunc-style checkpoint,
+  # or let tools/resume_evidence.ps1 loop until the final report exists.
+  ```
+
+  One-command CLIs (`hivebench`, `hivebench-protocol`, `hivebench-diagnostic`,
+  …) wrap the rest.
 - **Honest by design.** The suite surfaced its own failures first — the
   measurement fixes that made PES trustworthy (latency floor, stated-facts
-  reframe, hedge poisoning) are documented in the paper, not hidden.
+  reframe, hedge poisoning) are documented in the paper's threats section
+  (§9), not hidden.
 
 - Full offline test suite — no LLM calls needed to verify the pipeline;
   deterministic, replayable evaluation for every claim (P1–P12)
@@ -94,7 +120,7 @@ it does it deterministically, offline, and replayably:
 | `hive/` | The system: cortex (routing, PES, congestion), sieve (drones), retention, focal (budget/assembly), backend (LM Studio / OpenAI-compat), queen (async ground truth) |
 | `hivebench/` | The evaluation suite: `tests/` (grouped runner), `testing/` (A/B, ablation, shadow mode), `experiments/` (live benchmark, protocol, probes) |
 | `harness/` | HiveBench Studio sidecar (FastAPI service over the hive) |
-| `HIVE-HANDOFF.md` | **The single master doc** — project state, roadmap (S0–S6), how to run everything, next steps |
+| `docs/` | Full-stack install guide + integration guides (OpenCode, dsh, your own harness) |
 
 ## Install
 
@@ -148,7 +174,9 @@ One guided setup, then one command:
 `--setup` copies `providers.example.json` → `providers.local.json` if missing,
 probes for a reachable backend (LM Studio on `:1234`, or auto-starts the local
 `llama-server` from `models/gguf`), and prints the next step. The studio serves
-the hive over a FastAPI API (see `HARNESS-SPEC.md`).
+the hive over a FastAPI API — the endpoint contract lives in
+`harness/harness/app.py`, and `docs/INTEGRATE.md` shows how to point external
+clients at it.
 
 ## Run the test suite
 
@@ -170,14 +198,12 @@ The live benchmark talks to an OpenAI-compatible backend (e.g. LM Studio on
 .\.venv\Scripts\python -m experiments.generate_data --live --no-thinking --confidence off --max-convs 3 --max-turns 10
 ```
 
-See `HIVE-HANDOFF.md` §9 (live benchmark) and §15 (command cheat sheet) for the
-full run matrix and the overnight evidence protocol.
+See `docs/INSTALL.md` for the full setup and run guide, and
+`HIVE-WHITE-PAPER.md` §8 for the measured-outcome table behind every claim.
 
 ## Documentation
 
 - **`docs/INSTALL.md`** — full-stack install guide (system + benchmark + studio, fresh machine)
 - **`docs/INTEGRATE.md`** — using hive-memory inside OpenCode, dsh, or your own harness
-- **`HIVE-HANDOFF.md`** — master document: state, roadmap (S0–S6), lessons, measured results, next steps
-- **`HIVE-WHITE-PAPER.md`** — the theory, falsifiable predictions P1–P12, threats, evaluation scope
+- **`HIVE-WHITE-PAPER.md`** — the theory: postulates, falsifiable predictions P1–P12 with measured verdicts (§8), the PES metric (§6), KV-compression landscape (§1.6), threats & limitations (§9)
 - **`HIVE-DIAGRAMS.md`** — visuals and measured charts
-- **`HARNESS-SPEC.md`** — build brief for the HiveBench Studio sidecar
