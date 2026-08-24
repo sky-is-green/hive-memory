@@ -114,7 +114,7 @@ This avenue of research — a bounded-attention selection policy with measurable
 
 *Figure 1 — The same conversation, two context-delivery paths: naive FIFO eviction vs the hive's curation pipeline, and the measured outcomes of each (P1 flat decode tps; P2 recall 90.3% deterministic; post-run PES 80.0 GREEN vs ~12 baselines).*
 
-The residual weakness is retrieval *efficiency* (10.7% sentence-proxy precision, Threat 6 — the context contains many irrelevant chunks), which the queen judges as not harming answer sufficiency (100% in live runs). The 2026-08-23 **B avenue closed encoder scaling as the remedy**: five encoders (stock, 568M retrieval-specialized, two contrastive-tuned variants, plus the earlier graphcodebert cross-encoder and P5 bert-tiny) all land on the same top-K curve — the ceiling is data-structural, not encoder-capacity. The remaining options are to accept the ceiling (users still get correct answers, only a fatter context) or change the task definition (a classifier over chunk classes rather than cosine ranking). That inefficiency is the honest reason the avenue continues.
+The residual weakness is retrieval *efficiency* (10.7% sentence-proxy precision, Threat 6 — the context contains many irrelevant chunks), which the queen judges as not harming answer sufficiency (100% in live runs). The 2026-08-23 **B avenue closed encoder scaling as the remedy**: five encoders (stock, 568M retrieval-specialized [13], two contrastive-tuned variants, plus the earlier graphcodebert cross-encoder [12] and P5 bert-tiny [16]) all land on the same top-K curve — the ceiling is data-structural, not encoder-capacity. The remaining options are to accept the ceiling (users still get correct answers, only a fatter context) or change the task definition (a classifier over chunk classes rather than cosine ranking). That inefficiency is the honest reason the avenue continues.
 
 ### 1.5 Why this component is needed, why it affects all LLM usage, and why it must be separate
 
@@ -131,7 +131,7 @@ The residual weakness is retrieval *efficiency* (10.7% sentence-proxy precision,
 The long-context cost problem has three independent axes, and this paper's architecture is deliberately **one** of them:
 
 - **Selection** (what this project does): *which* tokens deserve to be in front of the model at all. The hive keeps the context bounded (1–3k tokens live-measured) and relevance-curated, so the KV cache only ever holds curated tokens plus a byte-stable pinned prefix.
-- **Precision** (what TurboQuant does): *how many bits* each KV value costs. TurboQuant (Google, ICLR 2026) is an online vector quantizer — random rotation plus per-coordinate Lloyd-Max scalar quantization — that stores the KV cache at ~3–4 bits with near-zero quality loss and a proof of near-optimal distortion. It compresses the KV that exists; it does not decide what exists.
+- **Precision** (what TurboQuant does): *how many bits* each KV value costs. TurboQuant (Google, ICLR 2026 [11]) is an online vector quantizer — random rotation plus per-coordinate Lloyd-Max scalar quantization [15] — that stores the KV cache at ~3–4 bits with near-zero quality loss and a proof of near-optimal distortion. It compresses the KV that exists; it does not decide what exists.
 - **Container** (what PagedAttention / llama.cpp prefix caching do): *how* the KV is organized and reused.
 
 These are **composable, not competing** (the 2026 KV-compression landscape explicitly frames the axes this way). A hive-curated 1–3k context with TurboQuant KV is `raw_history / budget × ~6` smaller than raw — e.g. a 50k-token conversation is ~150x smaller in KV — because the selection saving multiplies the precision saving on the surviving tokens. TurboQuant is also the *better* fit on exactly the hardware this project measures on: consumer AMD GPUs have no FP8-attention path, and TurboQuant works without it.
@@ -144,7 +144,7 @@ Two honest caveats. (1) **Attribution:** Threat 7 already concedes the hive's fl
 
 | Work | Relevance | How Hive differs |
 |---|---|---|
-| TurboQuant (Google, ICLR 2026) | Online vector quantization: KV cache at ~3–4 bits, near-zero loss (precision axis) | Hive attacks the *selection* axis (which tokens) instead; the axes compose (§1.6), so they are complementary rather than alternatives |
+| TurboQuant (Google, ICLR 2026) [11] | Online vector quantization: KV cache at ~3–4 bits, near-zero loss (precision axis) | Hive attacks the *selection* axis (which tokens) instead; the axes compose (§1.6), so they are complementary rather than alternatives |
 | SHADOW-250M (QLNI/NODEMIND, 2026) | Trained-in two-tier memory: 2k-token live KV + 100M-token 1-bit disk archive with lexical retrieval [10] | The *in-model* version of surplus storage: Hive's comb is external, separable, and falsifiable (P11); SHADOW's own limits (no cross-archive reasoning) are the separation argument (§1.5), and its benchmark shapes (look-alike needles, latest-wins, multi-key) are P11's measurement template |
 | Lost in the Middle (Liu et al., 2023) | Documents the attention-failure phenomenon | Hive treats it as a *design problem to engineer around*, not an irreducible limit |
 | Retrieval-Augmented Generation (Lewis et al., 2020) | Retrieval before generation improves groundedness | Hive retrieves from *its own conversation*, not an external corpus, and does so continuously, not per-query |
@@ -164,7 +164,7 @@ Hive Memory is organized into five functional layers. (Full implementation spec 
 | Layer | Function | Core mechanisms |
 |---|---|---|
 | **Cortex** | Orchestration & routing | Task classification, drone fleet dispatch, congestion detection, graceful degradation, auto-scaling |
-| **Sieve** | Relevance scoring | Ultra-small encoder (≈60 MB, paraphrase-MiniLM-L3-v2 default) for fast similarity; medium encoder (≈400 MB, domain-optimized) for uncertain cases; ≥4-character content-word filter; confidence estimation via prediction variance |
+| **Sieve** | Relevance scoring | Ultra-small encoder (≈60 MB, paraphrase-MiniLM-L3-v2 default [14]) for fast similarity; medium encoder (≈400 MB, domain-optimized) for uncertain cases; ≥4-character content-word filter; confidence estimation via prediction variance |
 | **Membrane** | Selective filtering | Semantic deduplication (cosine > 0.92, keep densest), topic-drift detection and reset |
 | **Retention** | Memory & decay | Remembrance pass (eviction interception), Sharp Decay Matrix (exponential, escalating friction), stale-context acceleration, **comb** (P11: surplus SSD tier for topic-return resurrection) |
 | **Focal** | Assembly | Adaptive token budget (configured 1k–6k by route tier; live-measured 1–3k), confidence-weighted sorting, final compressed context construction |
@@ -331,7 +331,7 @@ Code (young facts, no stale penalty) tolerates aggressive decay — recall holds
 
 **Result (2026-08-22):** **PASS.** On the full fixture (50 convs, 80/20 held-out split, 300 steps, bert-tiny, equal compute): targeted masking beat random masking on held-out retrieval precision (0.4409 vs 0.43) with a dramatically better final MLM loss (0.019 vs 0.167), confirming the targeted-masking signal concentrates learning on content-bearing tokens. Report: `models/p5/report.json`; reproducibility: `python -m experiments.p5_targeted_masking --steps 300`.
 
-**Important caveat (see Threat 6):** P5 passing does **not** close the precision ceiling. The P5-trained bert-tiny encoder, re-measured on the live-run query-chunk pairs, scored *worse* than all-MiniLM at every top-K (top-3: 7–9% vs 22%; top-8: 14% vs 22%) — the MLM fit does not transfer to retrieval discrimination at 2-layer scale. P5 confirms *how* to train a domain encoder, but the encoder must be large enough to matter; bert-tiny is not.
+**Important caveat (see Threat 6):** P5 passing does **not** close the precision ceiling. The P5-trained bert-tiny [16] encoder, re-measured on the live-run query-chunk pairs, scored *worse* than all-MiniLM at every top-K (top-3: 7–9% vs 22%; top-8: 14% vs 22%) — the MLM fit does not transfer to retrieval discrimination at 2-layer scale. P5 confirms *how* to train a domain encoder, but the encoder must be large enough to matter; bert-tiny is not.
 
 **Falsification:** No statistically significant precision difference at equal compute, or targeted masking loses on an out-of-domain generalization check.
 
@@ -483,10 +483,10 @@ no GPU code), so the measurements transfer across GPU vendors.
   `deberta-v3-base` for prose). P6 measured it as non-discriminating (see P6) — opt-in.
 
 **Backend (dual):**
-- **LM Studio (llama.cpp)** — OpenAI-compatible API on `localhost:1234`; the **measured**
+- **LM Studio (llama.cpp [17])** — OpenAI-compatible API on `localhost:1234`; the **measured**
   host. No surgical KV-cache API; benefits from the hive via the smaller compressed
   context + a byte-stable pinned prefix that llama.cpp's automatic prefix caching reuses.
-- **vLLM (PagedAttention)** — OpenAI-compatible API on `localhost:8000`; enables surgical
+- **vLLM (PagedAttention [5])** — OpenAI-compatible API on `localhost:8000`; enables surgical
   page-level KV-cache edits. The `VLLMBackend` is **written and mock-tested but not
   live-validated** — the paper's measurements are all llama.cpp; the vLLM path is the
   intended replication target (see Threat 7 for the prefix-cache attribution caveat).
@@ -553,7 +553,7 @@ it.
     | Encoder | top-1 prec | top-3 prec | top-5 prec | top-8 prec | best prec @ ≥90% recall |
     |---|---|---|---|---|---|
     | all-MiniLM (stock baseline) | 84.0% | 72.5% | 59.1% | 46.7% | 40.3% |
-    | **bge-m3 (B1: 568M, retrieval-specialized)** | 84.0% | 69.6% | 59.1% | 46.7% | **41.0%** |
+    | **bge-m3 (B1: 568M, retrieval-specialized [13])** | 84.0% | 69.6% | 59.1% | 46.7% | **41.0%** |
     | all-MiniLM contrastive-tuned, fresh-seed synthetic (B2) | 72.0% | 62.3% | 58.1% | 47.5% | 38.2% |
     | all-MiniLM contrastive-tuned, earlier live run (B3) | 80.0% | 71.0% | 59.1% | 46.7% | 40.5% |
 
@@ -625,3 +625,10 @@ The architecture in this paper ships as a working system — not just results. H
 8. Park, J., et al. (2023). Generative Agents: Interactive Simulacra of Human Behavior. *UIST*.
 9. Sentence-Transformers documentation — *Matryoshka Embeddings (variable-size embeddings)*. https://www.sbert.net/examples/training/matryoshka/README.html (MRL: Matryoshka Representation Learning; truncation to small dimensions with minimal quality loss).
 10. QLNI (NODEMIND). *SHADOW-250M-Instruct: 250M-parameter language model with a 100M-token offline disk archive* (two-tier KV cache: 2,048-token full-precision window + 1-bit/320-byte-per-token on-disk archive; trained-in archive retrieval; benchmark harness and raw results shipped in the repo). GitHub: https://github.com/QLNI/SHADOW-250M-Instruct; Hugging Face: https://huggingface.co/NODEMIND/SHADOW-250M.
+11. TurboQuant (Google). *TurboQuant: online vector-quantized KV caching* — random rotation plus per-coordinate Lloyd-Max scalar quantization; ~3–4-bit KV with near-zero quality loss and near-optimal distortion bounds. *ICLR 2026*.
+12. Guo, D., et al. (2021). GraphCodeBERT: Pre-training Code Representations with Data Flow. *ICLR*.
+13. Chen, J., et al. (2024). BGE M3-Embedding: Multi-Lingual, Multi-Functional, Multi-Granular Text Embeddings Through Self-Knowledge Distillation. *arXiv:2402.03216*.
+14. Reimers, N., & Gurevych, I. (2019). Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks. *EMNLP*.
+15. Lloyd, S. (1982). Least Squares Quantization in PCM. *IEEE Transactions on Information Theory*, 28(2).
+16. Bhargava, Y., et al. (2021). Well-Read Students Learn Better: On the Importance of Pre-training Compact Models. *arXiv:2108.08960*.
+17. Gerganov, G., et al. llama.cpp — LLM inference in C/C++ with automatic prefix caching and Vulkan backend. https://github.com/ggml-org/llama.cpp
