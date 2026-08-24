@@ -315,7 +315,34 @@ _SERVER_CSS = _CSS + """
         font-size: .88rem; }
  .liblist .librow.loaded { outline: 2px solid #157a3e; }
  .librow button { padding: .05rem .5rem; }
+ .hint {
+   display: inline-flex; align-items: center; justify-content: center;
+   width: 14px; height: 14px; margin-left: .15rem;
+   border: 1px solid #98a0b3; border-radius: 50%;
+   font-size: 10px; line-height: 1; color: #556;
+   background: #fff; cursor: help; position: relative;
+   user-select: none; flex: none; vertical-align: 1px; }
+ .hint:hover, .hint:focus { outline: none; border-color: #22263a; color: #000; }
+ .hint::after {
+   content: attr(data-tip);
+   position: absolute; left: -6px; top: calc(100% + 7px); z-index: 40;
+   width: max-content; max-width: 300px;
+   padding: .45rem .6rem; border-radius: 6px;
+   background: #1c1e26; color: #f2f3f7;
+   font-size: .78rem; line-height: 1.35; text-align: left;
+   white-space: normal; letter-spacing: normal;
+   opacity: 0; visibility: hidden; transform: translateY(-4px);
+   transition: opacity .12s ease .18s, transform .12s ease .18s;
+   pointer-events: none;
+   box-shadow: 0 4px 14px rgba(0, 0, 0, .28); }
+ .hint:hover::after, .hint:focus::after {
+   opacity: 1; visibility: visible; transform: none; }
 """
+
+
+def tip(text: str) -> str:
+    """One inline help glyph whose hover/focus tooltip explains the control it follows."""
+    return f'<span class="hint" tabindex="0" data-tip="{html.escape(text, quote=True)}">?</span>'
 
 
 def render_server_page() -> str:
@@ -346,29 +373,29 @@ def render_server_page() -> str:
 <button onclick="api('/v1/server/stop', 'POST').then(() => refresh())">Stop</button></div>
 <div class="row">
 <span class="sugwrap"><input id="model" placeholder="local model (blank = ok w/ hf)" size="26" list="local-suggestions">
-<datalist id="local-suggestions"></datalist></span>
-<label class="inline">ctx <input id="ctx" type="number" value="8192" size="4"></label>
-<label class="inline">gpu <input id="ngl" type="number" value="999" size="3"></label>
-<label class="inline">api-key <input id="l-apikey" size="10" placeholder="(none)"></label><br>
+<datalist id="local-suggestions"></datalist></span>{tip('Local GGUF (models/gguf) to serve; leave blank to rely on the hub fields below.')}
+<label class="inline">ctx {tip('Context window in tokens llama-server serves; caps prompt + reply together.')} <input id="ctx" type="number" value="8192" size="4"></label>
+<label class="inline">gpu {tip('Model layers offloaded to the GPU. 999 = every layer (needs enough VRAM); lower it if you run out.')} <input id="ngl" type="number" value="999" size="3"></label>
+<label class="inline">api-key {tip('Bearer token llama-server expects on requests; leave blank when none is set.')} <input id="l-apikey" size="10" placeholder="(none)"></label><br>
 <span class="sugwrap"><input id="hfrepo" placeholder="--hf-repo (type to search)" size="30"
        list="repo-suggestions">
 <div class="sugbox" id="sug-hfrepo"></div></span>
-<input id="hffile" placeholder="--hf-file" size="18">
+<input id="hffile" placeholder="--hf-file" size="18">{tip('Hugging Face source: repo id plus the exact GGUF filename inside it.')}
 <button onclick="startServer()">Start</button></div>
 <details><summary>Advanced launch flags</summary>
 <div class="row">
-<label class="inline">threads <input id="l-threads" type="number" size="3" placeholder="auto"></label>
-<label class="inline"><input id="l-fa" type="checkbox"> flash-attn</label>
-<label class="inline">parallel <input id="l-parallel" type="number" size="2" placeholder="1"></label>
-<label class="inline"><input id="l-mlock" type="checkbox"> mlock</label>
-<label class="inline"><input id="l-nommap" type="checkbox"> no-mmap</label>
+<label class="inline">threads {tip('CPU threads for inference; blank = automatic.')} <input id="l-threads" type="number" size="3" placeholder="auto"></label>
+<label class="inline"><input id="l-fa" type="checkbox"> flash-attn {tip('FlashAttention kernels: faster attention and lower VRAM at long context.')}</label>
+<label class="inline">parallel {tip('Requests decoded concurrently; each slot shares the context window.')} <input id="l-parallel" type="number" size="2" placeholder="1"></label>
+<label class="inline"><input id="l-mlock" type="checkbox"> mlock {tip('Lock model weights in RAM so they never page to disk; slower startup.')}</label>
+<label class="inline"><input id="l-nommap" type="checkbox"> no-mmap {tip('Read weights fully into memory instead of memory-mapping the file.')}</label>
 </div>
 <div class="row">
-<label class="inline">kv-K <select id="l-ctk"><option value="">f16</option><option>q8_0</option><option>q4_0</option></select></label>
-<label class="inline">kv-V <select id="l-ctv"><option value="">f16</option><option>q8_0</option><option>q4_0</option></select></label>
-<label class="inline">batch <input id="l-batch" type="number" size="4" placeholder="512"></label>
-<label class="inline">ubatch <input id="l-ubatch" type="number" size="4" placeholder="512"></label>
-<label class="inline">alias <input id="l-alias" size="14" placeholder="model id"></label>
+<label class="inline">kv-K {tip('Quantize the attention key cache to save VRAM (small quality cost).')} <select id="l-ctk"><option value="">f16</option><option>q8_0</option><option>q4_0</option></select></label>
+<label class="inline">kv-V {tip('Same quantization for the value cache.')} <select id="l-ctv"><option value="">f16</option><option>q8_0</option><option>q4_0</option></select></label>
+<label class="inline">batch {tip('Logical prompt-processing batch size.')} <input id="l-batch" type="number" size="4" placeholder="512"></label>
+<label class="inline">ubatch {tip('Physical micro-batch fed to the model per step.')} <input id="l-ubatch" type="number" size="4" placeholder="512"></label>
+<label class="inline">alias {tip('Model id exposed on /v1/models instead of the file path.')} <input id="l-alias" size="14" placeholder="model id"></label>
 </div>
 </details>
 <pre id="status">loading…</pre>
@@ -386,34 +413,34 @@ def render_server_page() -> str:
 <h2 style="margin-top:0">Engine profiles</h2>
 <div class="row">
 <select id="eng-select" style="min-width:180px" onchange="engineSelected()"></select>
-<label class="inline">default <input id="eng-default" type="checkbox" onchange="engDirty=true"></label>
+<label class="inline">default {tip('Profile applied when a conversation names no engine.')} <input id="eng-default" type="checkbox" onchange="engDirty=true"></label>
 <button onclick="engineAdd()">+ Add</button>
 </div>
 <div class="row">
-<label class="inline">name <input id="eng-name" size="16" oninput="engDirty=true"></label>
-<label class="inline">kind <select id="eng-kind" onchange="engDirty=true">
+<label class="inline">name {tip('Display name of this engine profile.')} <input id="eng-name" size="16" oninput="engDirty=true"></label>
+<label class="inline">kind {tip('Backend family the harness talks to.')} <select id="eng-kind" onchange="engDirty=true">
 <option>llama_cpp</option><option>lmstudio</option><option>vllm</option>
 <option>ollama</option><option>hosted</option></select></label>
 </div>
-<div class="row"><input id="eng-url" placeholder="base_url" style="width:95%" oninput="engDirty=true"></div>
+<div class="row"><input id="eng-url" placeholder="base_url" style="width:95%" oninput="engDirty=true">{tip('OpenAI-compatible endpoint root, e.g. http://localhost:1234/v1')}</div>
 <details open><summary>Sampling defaults (every request)</summary>
 <div class="row">
-<label class="inline">temp <input id="s-temp" type="number" step="0.05" min="0" max="2" size="4" oninput="engDirty=true"></label>
-<label class="inline">top_p <input id="s-topp" type="number" step="0.05" min="0" max="1" size="4" oninput="engDirty=true"></label>
-<label class="inline">top_k <input id="s-topk" type="number" size="4" oninput="engDirty=true"></label>
-<label class="inline">min_p <input id="s-minp" type="number" step="0.01" size="4" oninput="engDirty=true"></label>
+<label class="inline">temp {tip('Randomness: higher = more varied, lower = more focused.')} <input id="s-temp" type="number" step="0.05" min="0" max="2" size="4" oninput="engDirty=true"></label>
+<label class="inline">top_p {tip('Nucleus sampling: keep only tokens covering this cumulative probability.')} <input id="s-topp" type="number" step="0.05" min="0" max="1" size="4" oninput="engDirty=true"></label>
+<label class="inline">top_k {tip('Sample only from the K most likely tokens.')} <input id="s-topk" type="number" size="4" oninput="engDirty=true"></label>
+<label class="inline">min_p {tip('Drop tokens below this fraction of the top token probability.')} <input id="s-minp" type="number" step="0.01" size="4" oninput="engDirty=true"></label>
 </div>
 <div class="row">
-<label class="inline">repeat <input id="s-rep" type="number" step="0.05" size="4" oninput="engDirty=true"></label>
-<label class="inline">presence <input id="s-pres" type="number" step="0.1" size="3" oninput="engDirty=true"></label>
-<label class="inline">freq <input id="s-freq" type="number" step="0.1" size="3" oninput="engDirty=true"></label>
-<label class="inline">seed <input id="s-seed" type="number" size="7" oninput="engDirty=true"></label>
+<label class="inline">repeat {tip('Penalty on tokens already present; higher = less repetition.')} <input id="s-rep" type="number" step="0.05" size="4" oninput="engDirty=true"></label>
+<label class="inline">presence {tip('Flat penalty once a token appears at all.')} <input id="s-pres" type="number" step="0.1" size="3" oninput="engDirty=true"></label>
+<label class="inline">freq {tip('Penalty that grows with each repetition of a token.')} <input id="s-freq" type="number" step="0.1" size="3" oninput="engDirty=true"></label>
+<label class="inline">seed {tip('Fixed RNG seed for reproducible output; blank = random.')} <input id="s-seed" type="number" size="7" oninput="engDirty=true"></label>
 </div>
 <div class="row">
-<label class="inline">mirostat <input id="s-miro" type="number" min="0" max="2" size="2" oninput="engDirty=true"></label>
-<label class="inline">tau <input id="s-tau" type="number" step="0.1" size="4" oninput="engDirty=true"></label>
-<label class="inline">eta <input id="s-eta" type="number" step="0.01" size="4" oninput="engDirty=true"></label>
-<label class="inline">stop <input id="s-stop" size="12" placeholder="a,b" oninput="engDirty=true"></label>
+<label class="inline">mirostat {tip('Adaptive perplexity control: 0 = off, 1 = v1, 2 = v2.')} <input id="s-miro" type="number" min="0" max="2" size="2" oninput="engDirty=true"></label>
+<label class="inline">tau {tip('Mirostat target entropy: higher = more surprising text.')} <input id="s-tau" type="number" step="0.1" size="4" oninput="engDirty=true"></label>
+<label class="inline">eta {tip('How fast mirostat adapts toward its target.')} <input id="s-eta" type="number" step="0.01" size="4" oninput="engDirty=true"></label>
+<label class="inline">stop {tip('Comma-separated strings that end generation early.')} <input id="s-stop" size="12" placeholder="a,b" oninput="engDirty=true"></label>
 </div>
 </details>
 <details><summary>Load options (advisory record)</summary>
@@ -430,18 +457,18 @@ def render_server_page() -> str:
 <div class="note">Applied when a conversation is created — hit
 "New conversation" in the chat pane after changing.</div>
 <div class="row">
-<label class="inline">max_context <input id="h-maxctx" type="number" size="6"></label>
-<label class="inline">max_tokens <input id="h-maxtok" type="number" size="5" placeholder="4096 ceiling"></label>
+<label class="inline">max_context {tip('Token ceiling for the prompt the hive assembles each turn.')} <input id="h-maxctx" type="number" size="6"></label>
+<label class="inline">max_tokens {tip('Hard cap on generated tokens per reply.')} <input id="h-maxtok" type="number" size="5" placeholder="4096 ceiling"></label>
 </div>
 <div class="row">
-<label class="inline">stale wall <input id="h-stale" type="number" size="3"></label>
-<label class="inline">dedup <input id="h-dedup" type="number" step="0.01" size="4"></label>
-<label class="inline">drift <input id="h-drift" type="number" step="0.05" size="4"></label>
-<label class="inline">remem <input id="h-remem" type="number" step="0.05" size="4"></label>
+<label class="inline">stale wall {tip('Turns a fact may sit unreferenced before it ages out of the store.')} <input id="h-stale" type="number" size="3"></label>
+<label class="inline">dedup {tip('Similarity above which new text counts as a duplicate and is not stored again.')} <input id="h-dedup" type="number" step="0.01" size="4"></label>
+<label class="inline">drift {tip('Similarity drop between turns that marks a topic change.')} <input id="h-drift" type="number" step="0.05" size="4"></label>
+<label class="inline">remem {tip('Recall threshold: how similar content must be to resurface from memory.')} <input id="h-remem" type="number" step="0.05" size="4"></label>
 </div>
 <div class="row">
-<label class="inline">vocab boost <input id="h-vocab" type="number" step="0.05" size="4"></label>
-<label class="inline">confidence <select id="h-conf">
+<label class="inline">vocab boost {tip('Bonus added to relevance scores on exact keyword hits.')} <input id="h-vocab" type="number" step="0.05" size="4"></label>
+<label class="inline">confidence {tip('How the drone estimates its own certainty; mcdropout uses multiple stochastic passes.')} <select id="h-conf">
 <option>off</option><option>single</option><option>mcdropout</option></select></label>
 </div>
 <div class="row">

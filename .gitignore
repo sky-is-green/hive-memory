@@ -98,6 +98,7 @@ sample_data/
 
 # Generated data-generation runs (reports, logs, ground-truth DBs)
 runs/
+runs_mock/
 # Harness sidecar conversation state
 harness_state/
 
@@ -105,10 +106,16 @@ harness_state/
 transcripts/
 .sessions/
 .dsh-home/
+tools/llama.cpp/
 
 # Local runtime config (secrets / machine-specific)
 *.local.json
 config.local.*
+
+# AI coordination / handoff documents (local working documents, not repo content)
+HARNESS-SPEC.md
+HIVE-HANDOFF.md
+HANDOFF-*.md
 
 # OS / editor
 .DS_Store

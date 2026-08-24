@@ -1,4 +1,4 @@
-# HiveBench Studio — one-shot fresh-machine setup.
+# HiveBench Studio - one-shot fresh-machine setup.
 #
 # Idempotent: safe to re-run; each step skips work that is already done.
 # Assumes: this repo at <root>, the dsh fork cloned at <root>\..\hivebench-studio
@@ -8,13 +8,16 @@
 #   powershell -ExecutionPolicy Bypass -File setup.ps1 [-ForkPath <dir>] [-SkipFork] [-SkipLlama]
 #
 # What it does:
-#   1. Python venv + requirements (+ zstandard/huggingface_hub/fastapi/uvicorn)
+#   1. Python venv + requirements
 #   2. Editable install of this repo (flat packages incl. harness/)
 #   3. Fork toolchain: corepack shims on the user PATH, pnpm install, full build
 #   4. Node carrier for the dsh Python SDK (pnpm deploy + fixups script)
 #   5. Editable install of the fork's deepseek-harness sdk + runtime-bin
 #   6. llama.cpp Vulkan llama-server into tools\llama.cpp (unless -SkipLlama)
 #   7. Prints next steps (providers.local.json, python -m harness)
+#
+# NOTE: keep this file pure ASCII (PowerShell 5.1 reads BOM-less files as
+# ANSI, and multi-byte characters corrupt the parse).
 
 param(
     [string]$ForkPath = (Join-Path (Split-Path $PSScriptRoot -Parent) "hivebench-studio"),
@@ -40,7 +43,7 @@ Write-Host "venv ready: $VenvPy"
 
 if (-not $SkipFork) {
     if (-not (Test-Path (Join-Path $ForkPath "package.json"))) {
-        throw "dsh fork not found at $ForkPath — clone deepseek-ai/deepseek-harness there (pin b150a551b8) or pass -ForkPath"
+        throw "dsh fork not found at $ForkPath - clone deepseek-ai/deepseek-harness there (pin b150a551b8) or pass -ForkPath"
     }
 
     # --- 3. fork toolchain ----------------------------------------------------
@@ -54,7 +57,7 @@ if (-not $SkipFork) {
     }
     $env:PATH = "$bin;$env:PATH"
 
-    Step "pnpm install + build (fork) — several minutes"
+    Step "pnpm install + build (fork) - several minutes"
     Push-Location $ForkPath
     corepack pnpm install
     corepack pnpm run build
@@ -64,7 +67,8 @@ if (-not $SkipFork) {
     Step "dsh SDK node runtime carrier"
     Push-Location $ForkPath
     $staging = Join-Path $ForkPath "python\sdk-runtime\src\deepseek_harness_runtime\runtime\node"
-    if (-not (Test-Path (Join-Path $staging "node_modules\@deepseek-ai\dsh-sdk-jsonrpc-demo\lib\packaged-bin.js"))) {
+    $entry = Join-Path $staging "node_modules\@deepseek-ai\dsh-sdk-jsonrpc-demo\lib\packaged-bin.js"
+    if (-not (Test-Path $entry)) {
         corepack pnpm --filter dsh-jsonrpc-agent-pkg deploy --legacy --prod `
             --config.node-linker=hoisted --config.auto-install-peers=false `
             --config.link-workspace-packages=true $staging
@@ -86,7 +90,7 @@ if (-not $SkipLlama) {
     $server = Join-Path $Root "tools\llama.cpp\llama-server.exe"
     if (-not (Test-Path $server)) {
         $rel = Invoke-RestMethod "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10"
-        $asset = ($rels = $rel) | ForEach-Object { $_.assets } |
+        $asset = $rel | ForEach-Object { $_.assets } |
             Where-Object { $_.name -match "bin-win-vulkan-x64\.zip$" } | Select-Object -First 1
         if (-not $asset) { throw "no win-vulkan asset found in recent llama.cpp releases" }
         $zip = Join-Path $Root "tools\llama-vulkan.zip"
@@ -100,11 +104,11 @@ if (-not $SkipLlama) {
 }
 
 # --- done ----------------------------------------------------------------------
-Step "Setup complete — next steps"
+Step "Setup complete - next steps"
 Write-Host @"
   1. (optional) copy providers.example.json -> providers.local.json and add keys
   2. start the studio:   .\.venv\Scripts\python -m harness --llama-port 1235
      offline demo:       .\.venv\Scripts\python -m harness --mock
   3. open the console:   http://127.0.0.1:8765/server
-  4. optional hardening: `$env:HARNESS_TOKEN = '<secret>'  (console will prompt)
+  4. optional hardening: set HARNESS_TOKEN (the console will prompt for it)
 "@
