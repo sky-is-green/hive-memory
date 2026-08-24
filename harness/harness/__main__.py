@@ -1,11 +1,110 @@
-"""Run the harness sidecar: ``python -m harness [--host H] [--port P]``."""
+"""Run the harness sidecar: ``python -m harness [--host H] [--port P]``.
+
+``--detach`` gives the desktop-app launch feel: the command relaunches itself
+windowless (``pythonw``, detached process group), logs to ``logs/studio.log``,
+opens the browser once the port answers, and returns immediately;
+``--stop`` ends that instance. Foreground launches open the browser too
+(``--no-open`` opts out).
+"""
 
 from __future__ import annotations
 
 import argparse
+import json
+import os
+import subprocess
+import sys
+import threading
+import time
+import webbrowser
 from pathlib import Path
 
 import uvicorn
+
+
+def _log_file(log_dir: Path) -> Path:
+    """Append-mode log capturing a detached instance's output."""
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir / "studio.log"
+
+
+def _windowless_interpreter() -> str:
+    """The console-less interpreter matching the current one (Windows)."""
+    exe = Path(sys.executable)
+    if sys.platform == "win32":
+        windowless = exe.with_name("pythonw.exe")
+        if windowless.exists():
+            return str(windowless)
+    return str(exe)
+
+
+def _wait_and_open(url: str, timeout_s: float = 45.0) -> None:
+    """Open the browser as soon as the HTTP port answers (dsh-web behavior)."""
+    import socket
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    port = parts.port or 80
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection((parts.hostname or "127.0.0.1", port),
+                                          timeout=0.4):
+                webbrowser.open(url)
+                return
+        except OSError:
+            time.sleep(0.25)
+
+
+def _spawn_detached(child_argv: list[str], log_path: Path) -> int:
+    """Relaunch this command headless; the caller exits right after."""
+    log_handle = open(log_path, "ab")  # noqa: SIM115 - lifetime is the child's
+    extra: dict = {"env": {**os.environ, "HIVE_STUDIO_CHILD": "1"}}
+    if sys.platform == "win32":
+        # No console attached at all; output lands in the log file.
+        extra["creationflags"] = (subprocess.DETACHED_PROCESS
+                                  | subprocess.CREATE_NEW_PROCESS_GROUP)
+    else:
+        extra["start_new_session"] = True
+    proc = subprocess.Popen(
+        [_windowless_interpreter(), *child_argv],
+        stdin=subprocess.DEVNULL, stdout=log_handle, stderr=subprocess.STDOUT,
+        **extra,
+    )
+    return proc.pid
+
+
+def _stop(pidfile: Path) -> int:
+    """Kill the detached instance recorded by --detach, plus its managed
+    llama-server child (taskkill /T misses it once the parent detaches)."""
+    if not pidfile.exists():
+        print(f"no running studio recorded ({pidfile})")
+        return 0
+    raw = pidfile.read_text().strip()
+    llama_pid = None
+    try:
+        record = json.loads(raw)  # {"pid": ..., "llama_pid": ...}
+        pid = int(record["pid"])
+        llama_pid = record.get("llama_pid")
+    except (ValueError, TypeError):
+        pid = int(raw)
+    if llama_pid:
+        try:
+            import psutil
+
+            psutil.Process(int(llama_pid)).terminate()
+        except Exception:  # noqa: BLE001 - already gone
+            pass
+    if sys.platform == "win32":
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                       check=False, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
+    else:
+        import signal
+        os.kill(pid, signal.SIGTERM)
+    pidfile.unlink(missing_ok=True)
+    print(f"stopped studio (pid {pid})")
+    return 0
 
 from backend.providers import providers_path
 from cortex.e2e import FakeUltraSmall, MockTransport
@@ -53,10 +152,44 @@ def main(argv: list[str] | None = None) -> int:
         help="guided first-run check: create providers.local.json if missing, "
              "probe for a reachable backend, and print the next command",
     )
+    parser.add_argument(
+        "--detach", action="store_true",
+        help="launch headless: relaunch windowless, open the browser, and "
+             "return immediately (log: <log-dir>/studio.log)",
+    )
+    parser.add_argument(
+        "--stop", action="store_true",
+        help="stop the instance previously launched with --detach",
+    )
+    parser.add_argument(
+        "--no-open", action="store_true",
+        help="do not open the browser once the server is up",
+    )
     args = parser.parse_args(argv)
 
     if args.setup:
         return _setup(providers_path(args.providers_file or None))
+
+    log_dir = Path(args.log_dir)
+    pidfile = log_dir / "studio.pid"
+    url = f"http://{args.host}:{args.port}"
+
+    if args.stop:
+        return _stop(pidfile)
+
+    if args.detach:
+        raw = sys.argv[1:] if argv is None else list(argv)
+        child_argv = [a for a in raw if a not in ("--detach", "-d")]
+        log_path = _log_file(log_dir)
+        # Always relaunch through ``-m harness``: the current invocation may
+        # be a script path (``python path/to/__main__.py``), whose argv[0]
+        # must not leak into the child's interpreter arguments.
+        pid = _spawn_detached(["-m", "harness", *child_argv], log_path)
+        pidfile.write_text(str(pid))
+        print(f"HiveBench Studio starting at {url} (pid {pid}; log: {log_path})")
+        if not args.no_open:
+            _wait_and_open(url)
+        return 0
 
     kwargs = {
         "providers_file": providers_path(args.providers_file or None),
@@ -114,6 +247,21 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:  # noqa: BLE001 - never block boot on this
             print(f"auto-start: skipped ({exc})")
 
+    # Detached instances record the managed server so --stop can take the
+    # whole stack down (taskkill /T cannot reach the grandchild).
+    if os.environ.get("HIVE_STUDIO_CHILD"):
+        try:
+            llama_pid = app.state.models.status().get("pid")
+            pidfile.write_text(json.dumps({"pid": os.getpid(),
+                                           "llama_pid": llama_pid}))
+        except Exception:  # noqa: BLE001 - pidfile is best-effort
+            pass
+
+    # Browser opens once the port answers — foreground and detached alike
+    # (dsh-web behavior; --no-open opts out).
+    if not args.no_open:
+        threading.Thread(target=_wait_and_open, args=(url,), daemon=True).start()
+
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     return 0
 
@@ -167,6 +315,8 @@ def _setup(providers_file: Path) -> int:
     if found_backend:
         print("Ready. Start the studio with:")
         print("    python -m harness            # or: hivebench-harness")
+        print("    python -m harness --detach   # headless: no console window,"
+              " opens the browser")
         print("Then open http://127.0.0.1:8765")
     else:
         print("No reachable backend yet. Either:")

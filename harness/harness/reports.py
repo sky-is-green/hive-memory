@@ -472,17 +472,17 @@ def render_server_page() -> str:
 <option>off</option><option>single</option><option>mcdropout</option></select></label>
 </div>
 <div class="row">
-<label class="inline"><input id="h-sanitize" type="checkbox"> sanitize context</label>
-<label class="inline"><input id="h-hedge" type="checkbox"> filter hedge replies</label>
-<label class="inline"><input id="h-medium" type="checkbox"> medium drone</label>
+<label class="inline"><input id="h-sanitize" type="checkbox"> sanitize context {tip('Security scrub of the assembled context before it reaches the model.')}</label>
+<label class="inline"><input id="h-hedge" type="checkbox"> filter hedge replies {tip('Never store refusal/hedge replies; they pollute the store and resurface as bad context.')}</label>
+<label class="inline"><input id="h-medium" type="checkbox"> medium drone {tip('Second-pass encoder for harder queries: better recall, heavier and VRAM-hungry.')}</label>
 </div>
 <details><summary>Comb (P11 surplus tier)</summary>
 <div class="row">
-<label class="inline"><input id="h-comb" type="checkbox"> enabled</label>
-<label class="inline">top_k <input id="h-combk" type="number" size="3"></label>
-<label class="inline">gate <input id="h-combgate" type="number" step="0.05" size="4"></label>
-<label class="inline">max records <input id="h-combmax" type="number" size="5"></label>
-<label class="inline"><input id="h-combrel" type="checkbox"> curated-only</label>
+<label class="inline"><input id="h-comb" type="checkbox"> enabled {tip('Freeze evicted chunks to disk so old topics can be resurrected later (P11).')}</label>
+<label class="inline">top_k {tip('Archived candidates allowed to compete for context each turn.')} <input id="h-combk" type="number" size="3"></label>
+<label class="inline">gate {tip('Comb is consulted only when the store scores below this; normal turns pay nothing.')} <input id="h-combgate" type="number" step="0.05" size="4"></label>
+<label class="inline">max records {tip('Cap on archived records kept on disk.')} <input id="h-combmax" type="number" size="5"></label>
+<label class="inline"><input id="h-combrel" type="checkbox"> curated-only {tip('Archive only chunks the hive previously selected as relevant.')}</label>
 </div>
 </details>
 <div class="row"><span id="hive-msg" class="note"></span>
@@ -512,8 +512,8 @@ providers.local.json (gitignored).</div>
 <h2 style="margin:0" id="chat-title">Loaded model</h2>
 <div>
 <span class="modesel">
-<label class="inline"><input type="radio" name="chatmode" value="hive" checked> Hive</label>
-<label class="inline"><input type="radio" name="chatmode" value="agent"> Agent (dsh)</label>
+<label class="inline"><input type="radio" name="chatmode" value="hive" checked> Hive {tip('Curated generation: the hive assembles the context, then generates directly.')}</label>
+<label class="inline"><input type="radio" name="chatmode" value="agent"> Agent (dsh) {tip('The full DeepSeek Harness agent loop — tools, multi-step turns, session log — on the loaded model.')}</label>
 </span>
 <button onclick="newConversation()">New conversation</button></div>
 <div id="chatlog" class="chatlog"></div>
@@ -541,7 +541,7 @@ turns, durable session log — pointed at the loaded model.</div>
 <div class="row"><span class="sugwrap" style="width:100%"><input id="drepo" placeholder="repo id (type for suggestions)" style="width:100%"
        list="repo-suggestions">
 <div class="sugbox" id="sug-drepo"></div></span><br>
-<input id="dfile" placeholder="file.gguf" size="24">
+<input id="dfile" placeholder="file.gguf" size="24">{tip('Exact GGUF filename inside that repo (copy it from the search results).')}
 <button onclick="download()">Download</button></div>
 <pre id="downloads"></pre>
 </section>
