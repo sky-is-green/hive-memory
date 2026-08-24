@@ -107,6 +107,12 @@ instances keyed by `conversation_id` (per-conversation store + comb isolation is
 mandatory — `HIVE-HANDOFF.md` §6.0 #14). Threads, not processes, for local
 instances; generation calls are blocking (streaming is a v2).
 
+**First run (implemented 2026-08-24):** `python -m harness --setup` guides the
+user end-to-end — creates `providers.local.json` from `providers.example.json`
+if missing, probes for a reachable backend (LM Studio on `:1234`, or the local
+`llama-server` auto-start path from `models/gguf`), and prints the next command.
+Keep `--setup` idempotent and dependency-free (no network, no model loads).
+
 ---
 
 ## 4. Provider layer (small, do it first)
