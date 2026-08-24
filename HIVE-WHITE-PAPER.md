@@ -616,19 +616,19 @@ The architecture in this paper ships as a working system — not just results. H
 ## References
 
 1. Ebbinghaus, H. (1885). *Über das Gedächtnis* (On Memory).
-2. Lewis, P., et al. (2020). Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks. *NeurIPS*.
-3. Gururangan, S., et al. (2020). Don't Stop Pretraining: Adapt Language Models to Domains and Tasks. *ACL*.
-4. Liu, N., et al. (2023). Lost in the Middle: How Language Models Use Long Contexts. *TACL*.
-5. Kwon, W., et al. (2023). Efficient Memory Management for Large Language Model Serving with PagedAttention. *SOSP*.
-6. Jiang, H., et al. (2023). LLMLingua: Compressing Prompts for Accelerated Inference of Large Language Models. *EMNLP*.
-7. Packer, C., et al. (2023). MemGPT: Towards LLMs as Operating Systems.
-8. Park, J., et al. (2023). Generative Agents: Interactive Simulacra of Human Behavior. *UIST*.
+2. Lewis, P., et al. (2020). Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks. *NeurIPS*. https://arxiv.org/abs/2005.11401
+3. Gururangan, S., et al. (2020). Don't Stop Pretraining: Adapt Language Models to Domains and Tasks. *ACL*. https://arxiv.org/abs/2004.10964
+4. Liu, N., et al. (2023). Lost in the Middle: How Language Models Use Long Contexts. *TACL*. https://arxiv.org/abs/2307.03172
+5. Kwon, W., et al. (2023). Efficient Memory Management for Large Language Model Serving with PagedAttention. *SOSP*. https://arxiv.org/abs/2309.06180
+6. Jiang, H., et al. (2023). LLMLingua: Compressing Prompts for Accelerated Inference of Large Language Models. *EMNLP*. https://arxiv.org/abs/2310.05736
+7. Packer, C., et al. (2023). MemGPT: Towards LLMs as Operating Systems. https://arxiv.org/abs/2310.08560
+8. Park, J., et al. (2023). Generative Agents: Interactive Simulacra of Human Behavior. *UIST*. https://arxiv.org/abs/2304.03442
 9. Sentence-Transformers documentation — *Matryoshka Embeddings (variable-size embeddings)*. https://www.sbert.net/examples/training/matryoshka/README.html (MRL: Matryoshka Representation Learning; truncation to small dimensions with minimal quality loss).
 10. QLNI (NODEMIND). *SHADOW-250M-Instruct: 250M-parameter language model with a 100M-token offline disk archive* (two-tier KV cache: 2,048-token full-precision window + 1-bit/320-byte-per-token on-disk archive; trained-in archive retrieval; benchmark harness and raw results shipped in the repo). GitHub: https://github.com/QLNI/SHADOW-250M-Instruct; Hugging Face: https://huggingface.co/NODEMIND/SHADOW-250M.
-11. TurboQuant (Google). *TurboQuant: online vector-quantized KV caching* — random rotation plus per-coordinate Lloyd-Max scalar quantization; ~3–4-bit KV with near-zero quality loss and near-optimal distortion bounds. *ICLR 2026*.
-12. Guo, D., et al. (2021). GraphCodeBERT: Pre-training Code Representations with Data Flow. *ICLR*.
-13. Chen, J., et al. (2024). BGE M3-Embedding: Multi-Lingual, Multi-Functional, Multi-Granular Text Embeddings Through Self-Knowledge Distillation. *arXiv:2402.03216*.
-14. Reimers, N., & Gurevych, I. (2019). Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks. *EMNLP*.
-15. Lloyd, S. (1982). Least Squares Quantization in PCM. *IEEE Transactions on Information Theory*, 28(2).
-16. Bhargava, Y., et al. (2021). Well-Read Students Learn Better: On the Importance of Pre-training Compact Models. *arXiv:2108.08960*.
+11. TurboQuant (Google). *TurboQuant: online vector-quantized KV caching* — random rotation plus per-coordinate Lloyd-Max scalar quantization; ~3–4-bit KV with near-zero quality loss and near-optimal distortion bounds. *ICLR 2026*. (link TBD)
+12. Guo, D., et al. (2021). GraphCodeBERT: Pre-training Code Representations with Data Flow. *ICLR*. https://arxiv.org/abs/2009.08366
+13. Chen, J., et al. (2024). BGE M3-Embedding: Multi-Lingual, Multi-Functional, Multi-Granular Text Embeddings Through Self-Knowledge Distillation. *arXiv:2402.03216*. https://arxiv.org/abs/2402.03216
+14. Reimers, N., & Gurevych, I. (2019). Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks. *EMNLP*. https://arxiv.org/abs/1908.10084
+15. Lloyd, S. (1982). Least Squares Quantization in PCM. *IEEE Transactions on Information Theory*, 28(2). https://ieeexplore.ieee.org/document/1056489
+16. Bhargava, Y., et al. (2021). Well-Read Students Learn Better: On the Importance of Pre-training Compact Models. *arXiv:2108.08960*. https://arxiv.org/abs/2108.08960
 17. Gerganov, G., et al. llama.cpp — LLM inference in C/C++ with automatic prefix caching and Vulkan backend. https://github.com/ggml-org/llama.cpp
