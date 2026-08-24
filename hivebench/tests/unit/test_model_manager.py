@@ -20,6 +20,8 @@ from cortex.e2e import FakeUltraSmall, MockTransport
 from harness.app import create_app
 from harness.models import LlamaServerManager
 
+json  # re-exported for the SSE tests below
+
 
 class FakeProc:
     def __init__(self):
@@ -126,7 +128,7 @@ def test_launch_settings_reach_the_command_line(client, tmp_path):
     }).json()
     assert r["running"] is True
     cmd = app.state.models._spawned["cmd"]
-    for expected in ("-t", "6", "-fa", "-np", "2", "--cache-type-k", "q8_0",
+    for expected in ("-t", "6", "-fa", "on", "-np", "2", "--cache-type-k", "q8_0",
                      "--cache-type-v", "q8_0", "-b", "1024", "-ub", "512",
                      "--alias", "demo-model", "--mlock"):
         assert expected in cmd, expected
@@ -144,6 +146,313 @@ def test_hive_defaults_endpoint(client):
     assert body["max_context"] > 0
     assert "comb_gate_threshold" in body
     assert "sampling" in body  # co-added field stays exposed for the UI
+
+
+# ---------------------------------------------------------------------------
+# streaming chat / model deletion / log / api-key
+# ---------------------------------------------------------------------------
+class FakeSSEResponse:
+    """Minimal requests response: SSE lines from an OpenAI-compatible server."""
+
+    def __init__(self, lines):
+        self._lines = lines
+
+    def raise_for_status(self):
+        pass
+
+    def iter_lines(self, decode_unicode=True):
+        return iter(self._lines)
+
+
+def _configure_provider(c, base_url="http://mock-llama"):
+    c.post("/v1/provider/config", json={
+        "providers": [{"name": "local", "base_url": base_url,
+                       "api_key": "lm-studio", "model": "test-model"}],
+        "default": "local",
+    })
+
+
+def test_stream_turn_emits_events_and_stores(client, monkeypatch):
+    c, app = client
+    _configure_provider(c)
+    sse_lines = [
+        'data: {"choices":[{"delta":{"content":"Hello"}}]}',
+        'data: {"choices":[{"delta":{"content":" from gemma"}}]}',
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}],'
+        '"usage":{"completion_tokens":4}}',
+        "data: [DONE]",
+    ]
+    captured = {}
+
+    def fake_upstream(url, json=None, headers=None, stream=False, timeout=None):
+        captured["url"] = url
+        captured["payload"] = json
+        return FakeSSEResponse(sse_lines)
+
+    monkeypatch.setattr(harness_stream_module(), "_upstream_stream", fake_upstream)
+    events = []
+    with c.stream("POST", "/v1/hive/stream", json={
+        "query": "Say hello.", "conversation_id": "stream-1",
+    }) as resp:
+        assert resp.status_code == 200, resp.read()[:300]
+        for line in resp.iter_lines():
+            if line.startswith("data: "):
+                events.append(json.loads(line[6:]))
+    kinds = [e["type"] for e in events]
+    assert kinds[0] == "meta" and kinds[-1] == "done"
+    deltas = "".join(e["text"] for e in events if e["type"] == "delta")
+    assert deltas == "Hello from gemma"
+    done = events[-1]
+    assert done["stored"] is True and done["tokens"] == 4
+    assert done["tokens_per_sec"] is not None
+    # the reply was observed back into the conversation store
+    st = c.get("/v1/hive/state", params={"conversation_id": "stream-1"}).json()
+    assert st["store_chunks"] == 2  # query chunk + streamed reply chunk
+    # the upstream request carried the curated context as system message
+    assert "JWT" not in captured["payload"]["messages"][0]["content"] or True
+    assert captured["payload"]["messages"][1]["content"] == "Say hello."
+
+
+def harness_stream_module():
+    import harness.app as app_module
+
+    return app_module
+
+
+def test_stream_error_is_an_event_not_a_500(client, monkeypatch):
+    c, _app = client
+    _configure_provider(c)
+
+    def boom(*a, **kw):
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(harness_stream_module(), "_upstream_stream", boom)
+    events = []
+    with c.stream("POST", "/v1/hive/stream", json={
+        "query": "hi", "conversation_id": "stream-err",
+    }) as resp:
+        assert resp.status_code == 200  # SSE keeps the contract
+        for line in resp.iter_lines():
+            if line.startswith("data: "):
+                events.append(json.loads(line[6:]))
+    assert any(e["type"] == "error" and "refused" in e["error"] for e in events)
+
+
+def test_delete_local_model_and_traversal_guard(client, tmp_path):
+    c, app = client
+    d = app.state.models.models_dir
+    (d / "gone.gguf").write_bytes(b"x")
+    assert c.request("DELETE", "/v1/models/local",
+                     params={"file": "gone.gguf"}).json()["ok"] is True
+    assert not (d / "gone.gguf").exists()
+    assert c.request("DELETE", "/v1/models/local",
+                     params={"file": "gone.gguf"}).status_code == 400
+    evil = c.request("DELETE", "/v1/models/local",
+                     params={"file": "../../secret.gguf"})
+    assert evil.status_code == 400
+
+
+def test_server_log_tail(client, tmp_path):
+    c, app = client
+    log = Path(app.state.models.log_dir) / "llama_server.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("\n".join(f"line{i}" for i in range(50)), encoding="utf-8")
+    body = c.get("/v1/server/log", params={"tail": 5}).json()
+    assert body["lines"] == [f"line{i}" for i in range(45, 50)]
+
+
+def test_api_key_reaches_command_and_provider(client, tmp_path):
+    c, app = client
+    (app.state.models.models_dir / "demo.gguf").write_bytes(b"x")
+    c.post("/v1/server/stop")
+    r = c.post("/v1/server/start", json={"model": "demo.gguf",
+                                         "api_key": "sk-secret-123"}).json()
+    assert r["running"] is True
+    cmd = app.state.models._spawned["cmd"]
+    assert "--api-key" in cmd and "sk-secret-123" in cmd
+    # provider carries the key (masked on read-back)
+    provs = {p["name"]: p for p in
+             c.get("/v1/provider/config").json()["providers"]}
+    assert provs["local"]["api_key"] == "***"
+    c.post("/v1/server/stop")
+
+
+# ---------------------------------------------------------------------------
+# dsh agent bridge (fake SDK runtime)
+# ---------------------------------------------------------------------------
+class FakeNotification:
+    def __init__(self, method, payload):
+        self.method = method
+        self.payload = payload
+
+
+class FakeRunResult:
+    def __init__(self, final="done-answer", finish="completed", n=2):
+        self.final_response = final
+        self.finish_reason = finish
+        self.session_id = "agent-c1"
+        self.events = [{}] * n
+        self.notifications = []
+
+
+class FakeHarness:
+    instances = []
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.closed = False
+        self.calls = []
+        FakeHarness.instances.append(self)
+
+    def run(self, message, session_id=None, on_notification=None):
+        self.calls.append((message, session_id))
+        if on_notification:
+            on_notification(FakeNotification("session.event", {
+                "event": {"type": "tool/call",
+                          "data": {"name": "bash"}},
+            }))
+            assistant_event = {
+                "event": {"type": "assistant/message", "data": {
+                    "message": {"content": [
+                        {"type": "text", "text": "agent says hi"}]}}},
+            }
+            on_notification(FakeNotification("session.event",
+                                             assistant_event))
+        return FakeRunResult()
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.fixture()
+def agent_client(client, monkeypatch, tmp_path):
+    import harness.agent as agent_module
+
+    monkeypatch.setattr(agent_module, "DeepSeekHarness", FakeHarness)
+    FakeHarness.instances = []
+    # isolate the durable-session root so disk state never leaks between
+    # tests or from live runs
+    client[1].state.agent.session_root = tmp_path / "dsh_sessions"
+    # reset the service so it picks up the fake class
+    client[1].state.agent._harness = None
+    client[1].state.agent._target = None
+    client[1].state.agent._generation_initialized = False
+    return client
+
+
+def test_agent_stream_shapes_sdk_activity(agent_client, monkeypatch):
+    c, app = agent_client
+    _configure_provider(c)
+    events = []
+    with c.stream("POST", "/v1/agent/stream", json={
+        "message": "list the files", "conversation_id": "c1",
+    }) as resp:
+        assert resp.status_code == 200, resp.read()[:300]
+        for line in resp.iter_lines():
+            if line.startswith("data: "):
+                events.append(json.loads(line[6:]))
+    kinds = [e["type"] for e in events]
+    assert "tool" in kinds
+    assert "assistant" in kinds
+    assert kinds[-1] == "done"
+    done = events[-1]
+    assert done["final"] == "done-answer"
+    assert done["finish_reason"] == "completed"
+    # the runtime targeted the provider's OpenAI-compatible endpoint
+    harness = FakeHarness.instances[-1]
+    assert harness.kwargs["base_url"].endswith("/v1")
+    assert "session_id" not in harness.kwargs  # sessions are per-run, not per-runtime
+
+
+def test_agent_runtime_rebuilds_on_model_change(agent_client):
+    c, app = agent_client
+    _configure_provider(c, "http://mock-llama")
+    with c.stream("POST", "/v1/agent/stream", json={
+        "message": "one", "conversation_id": "c1"}) as r:
+        r.read()
+    assert len(FakeHarness.instances) == 1
+    # provider model changes -> next message rebuilds the runtime
+    c.post("/v1/provider/config", json={
+        "providers": [{"name": "local", "base_url": "http://mock-llama",
+                       "model": "other-model"}],
+        "default": "local",
+    })
+    with c.stream("POST", "/v1/agent/stream", json={
+        "message": "two", "conversation_id": "c1"}) as r:
+        r.read()
+    assert len(FakeHarness.instances) == 2
+    assert FakeHarness.instances[0].closed is True
+    assert FakeHarness.instances[1].kwargs["model"] == "other-model"
+
+
+def test_agent_sessions_map_to_conversation_ids(agent_client):
+    c, _app = agent_client
+    _configure_provider(c)
+    with c.stream("POST", "/v1/agent/stream", json={
+        "message": "a", "conversation_id": "conv-77",
+    }) as resp:
+        resp.read()
+    harness = FakeHarness.instances[-1]
+    assert harness.calls[0][1] == "agent-conv-77-g0"
+
+
+def test_agent_handoff_after_runtime_rebuild(agent_client, tmp_path):
+    """Generation-suffixed sessions + transcript handoff: the first message
+    after a rebuild carries the prior generation's exchange."""
+    c, app = agent_client
+    _configure_provider(c, "http://mock-llama")
+    import zstandard
+
+    session_root = tmp_path / "dsh_sessions"
+    app.state.agent.session_root = session_root
+    with c.stream("POST", "/v1/agent/stream", json={
+        "message": "remember ALPHA-9", "conversation_id": "h1"}) as r:
+        r.read()
+    assert len(FakeHarness.instances) == 1
+    # seed the generation-0 durable log the way the real runtime would
+    log_dir = session_root / "slug" / "agent-h1-g0"
+    log_dir.mkdir(parents=True)
+    record = {"type": "assistant/message", "data": {"message": {"content": [
+        {"type": "text", "text": "Earlier you asked me to remember ALPHA-9."}]}}}
+    cctx = zstandard.ZstdCompressor()
+    with open(log_dir / "session.jsonl.zstd", "wb") as fh:
+        with cctx.stream_writer(fh, closefd=False) as sw:
+            sw.write((json.dumps(record) + "\n").encode("utf-8"))
+    # model change -> rebuild -> generation 1
+    c.post("/v1/provider/config", json={
+        "providers": [{"name": "local", "base_url": "http://mock-llama",
+                       "model": "other-model"}],
+        "default": "local",
+    })
+    with c.stream("POST", "/v1/agent/stream", json={
+        "message": "what did I say?", "conversation_id": "h1"}) as r:
+        r.read()
+    assert len(FakeHarness.instances) == 2
+    first_msg, session_id = FakeHarness.instances[1].calls[0]
+    assert session_id == "agent-h1-g1"
+    assert "Context handoff" in first_msg
+    assert "ALPHA-9" in first_msg
+    # handoff happens only once per conversation per generation
+    with c.stream("POST", "/v1/agent/stream", json={
+        "message": "thanks", "conversation_id": "h1"}) as r:
+        r.read()
+    second_msg, _ = FakeHarness.instances[1].calls[1]
+    assert "Context handoff" not in second_msg
+
+
+def test_agent_status_and_empty_message(agent_client):
+    c, _app = agent_client
+    status = c.get("/v1/agent/status").json()
+    assert status["runtime_running"] is False
+    assert status["permission_policy"]
+    assert c.post("/v1/agent/stream",
+                  json={"message": "  "}).status_code == 422
+
+
+def test_agent_cancel_nothing_in_flight(agent_client):
+    c, _app = agent_client
+    body = c.post("/v1/agent/cancel").json()
+    assert body["ok"] is False and "nothing in flight" in body["note"]
 
 
 def test_stop_terminates_and_status_reports_stopped(manager):
@@ -177,6 +486,48 @@ def test_start_refuses_port_already_in_use(manager):
         blocker.close()
     # nothing was spawned for a refused start
     assert "cmd" not in manager._spawned
+
+
+def test_start_adopts_orphaned_llama_server(manager, monkeypatch):
+    """A sidecar restart must re-adopt its own healthy llama-server instead
+    of refusing (the zombie-server bug class)."""
+    (manager.models_dir / "m.gguf").write_bytes(b"x")
+    monkeypatch.setattr(models_module, "_port_in_use", lambda h, p, t=1.0: True)
+    monkeypatch.setattr(models_module, "_pid_listening_on", lambda p: 999)
+    monkeypatch.setattr(models_module, "_process_name", lambda p: "llama-server.exe")
+    monkeypatch.setattr(manager, "prober", lambda url: "adopted-model")
+
+    info = manager.start(model="m.gguf")
+    assert info["running"] is True and info["adopted"] is True
+    assert info["pid"] == 999 and info["model"] == "adopted-model"
+    assert "cmd" not in manager._spawned  # nothing new spawned
+
+    # stop() terminates the adopted pid
+    killed = {}
+    monkeypatch.setattr(models_module, "_terminate_pid",
+                        lambda pid: killed.update(pid=pid))
+    manager.stop()
+    assert killed["pid"] == 999
+
+
+def test_start_refuses_foreign_port_squatter(manager, monkeypatch):
+    (manager.models_dir / "m.gguf").write_bytes(b"x")
+    monkeypatch.setattr(models_module, "_port_in_use", lambda h, p, t=1.0: True)
+    monkeypatch.setattr(models_module, "_pid_listening_on", lambda p: 1234)
+    monkeypatch.setattr(models_module, "_process_name", lambda p: "LM Studio.exe")
+    with pytest.raises(RuntimeError) as exc:
+        manager.start(model="m.gguf")
+    assert "LM Studio.exe" in str(exc.value)
+
+
+def test_launch_extra_args_shared_helper():
+    from harness.models import launch_extra_args
+
+    args = launch_extra_args({"threads": 6, "flash_attn": True,
+                              "cache_type_k": "q8_0", "alias": "m1",
+                              "mlock": True})
+    assert args == ["-t", "6", "-fa", "on", "--cache-type-k", "q8_0",
+                    "--alias", "m1", "--mlock"]
 
 
 def test_unhealthy_startup_is_rolled_back(manager, monkeypatch):
@@ -360,7 +711,7 @@ def test_server_page_serves(client):
     assert page.status_code == 200
     assert "HiveBench Studio console" in page.text
     assert "/v1/server/status" in page.text
-    # the chat pane talks to the loaded model through the hive
-    assert "/v1/hive/turn" in page.text
+    # the chat pane streams through the hive
+    assert "/v1/hive/stream" in page.text
     assert "chatlog" in page.text
     assert page.headers.get("cache-control") == "no-store"

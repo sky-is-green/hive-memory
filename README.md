@@ -49,21 +49,57 @@ quality. The head-to-head evidence above is what the claims rest on.*
 
 ## Install
 
-Requires Python 3.10+.
+Requires Python 3.10+. Pick the layer you need — they install cleanly:
 
 ```powershell
 # Windows (PowerShell)
 python -m venv .venv
-.\.venv\Scripts\python -m pip install -r requirements.txt -r requirements-dev.txt
-.\.venv\Scripts\python -m pip install -e .
+.\.venv\Scripts\python -m pip install -e ".[harness,bench]"
 ```
 
 ```bash
 # Linux / macOS
 python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
-.venv/bin/python -m pip install -e .
+.venv/bin/python -m pip install -e ".[harness,bench]"
 ```
+
+| Install target | What you get |
+|---|---|
+| `pip install hive-memory` | The system: drones, cortex, retention, backends |
+| `pip install "hive-memory[harness]"` | + HiveBench Studio (FastAPI sidecar) |
+| `pip install "hive-memory[bench]"` | + the evaluation suite (pytest, ST trainer) |
+
+`requirements.txt` / `requirements-dev.txt` remain the full pinned manifest.
+
+## Use the system in your own project
+
+`hive/` is self-contained — it never imports from the bench or the harness:
+
+```python
+from hive import Hive, HiveConfig, UltraSmallDrone, LMStudioBackend
+
+hive = Hive(
+    config=HiveConfig(),
+    ultra=UltraSmallDrone(),
+    backend=LMStudioBackend(base_url="http://localhost:1234"),
+)
+result = hive.process_turn("what did we decide about auth?")
+print(result.reply)
+```
+
+## Run the studio (HiveBench Studio)
+
+One guided setup, then one command:
+
+```powershell
+.\.venv\Scripts\python -m harness --setup   # creates config, checks backend
+.\.venv\Scripts\python -m harness           # starts http://127.0.0.1:8765
+```
+
+`--setup` copies `providers.example.json` → `providers.local.json` if missing,
+probes for a reachable backend (LM Studio on `:1234`, or auto-starts the local
+`llama-server` from `models/gguf`), and prints the next step. The studio serves
+the hive over a FastAPI API (see `HARNESS-SPEC.md`).
 
 ## Run the test suite
 

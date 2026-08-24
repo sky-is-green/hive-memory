@@ -647,6 +647,117 @@ def test_index_redirects_to_runs(client, tmp_path):
     assert r.headers["location"] == "/runs"
 
 
+def test_token_auth_guard(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HARNESS_TOKEN", "sekrit")
+    app = create_app(
+        ultra_factory=FakeUltraSmall,
+        backend_factory=lambda model=None: OpenAICompatBackend(
+            transport=MockTransport(latency_ms=0)),
+        runs_root=tmp_path / "runs",
+        providers_file=tmp_path / "p.json",
+        log_dir=str(tmp_path / "logs"),
+        state_dir=tmp_path / "harness_state",
+    )
+    c = TestClient(app)
+    assert c.get("/health").status_code == 200  # unguarded
+    assert c.post("/v1/commands/run", json={"line": "/status"}).status_code == 401
+    ok = c.post("/v1/commands/run", json={"line": "/status"},
+                headers={"x-hive-token": "sekrit"})
+    assert ok.status_code == 200 and ok.json()["kind"] == "success"
+
+
+def test_cors_default_is_localhost_not_wildcard():
+    from harness.app import _cors_origins
+
+    assert "*" not in _cors_origins()
+    assert any("localhost" in o for o in _cors_origins())
+
+
+# ---------------------------------------------------------------------------
+# console slash commands (dsh conventions)
+# ---------------------------------------------------------------------------
+def test_parse_command_follows_dsh_conventions():
+    from harness.commands import parse_command
+
+    assert parse_command("/save") == ("save", "")
+    assert parse_command("/save my name") == ("save", " my name")  # verbatim, dsh-style
+    assert parse_command("/SAVE x") == ("save", " x")
+    assert parse_command("/goal\nmulti\nline") == ("goal", "\nmulti\nline")
+    assert parse_command("plain message") is None
+
+
+def test_commands_registry_serves_descriptors(client):
+    c, _app = client
+    body = c.get("/v1/commands").json()
+    names = {cmd["name"] for cmd in body["commands"]}
+    assert {"help", "new", "save", "model", "mode", "provider", "engine",
+            "bench", "status"} <= names
+    save = [cmd for cmd in body["commands"] if cmd["name"] == "save"][0]
+    assert save["input"]["hint"] == "[name]"
+
+
+def test_command_run_help_new_and_unknown(client):
+    c, _app = client
+    help_result = c.post("/v1/commands/run", json={
+        "line": "/help", "conversation_id": "x"}).json()
+    assert help_result["kind"] == "success"
+    assert "/save" in help_result["text"]
+
+    unknown = c.post("/v1/commands/run", json={
+        "line": "/nope", "conversation_id": "x"}).json()
+    assert unknown["kind"] == "error" and "unknown command" in unknown["text"]
+
+    fresh = c.post("/v1/commands/run", json={
+        "line": "/new", "conversation_id": "x"}).json()
+    assert fresh["kind"] == "success"
+    assert fresh["new_conversation_id"] != "x"
+
+
+def test_command_mode_sets_transport(client):
+    c, _app = client
+    r = c.post("/v1/commands/run", json={
+        "line": "/mode agent", "conversation_id": "x"}).json()
+    assert r["kind"] == "success" and r["mode"] == "agent"
+    bad = c.post("/v1/commands/run", json={
+        "line": "/mode yolo", "conversation_id": "x"}).json()
+    assert bad["kind"] == "error"
+
+
+def test_command_save_exports_transcript(client, tmp_path):
+    c, app = client
+    cid = "save-me"
+    c.post("/v1/hive/curate", json={"query": "The refresh token is 3600s.",
+                                    "conversation_id": cid})
+    c.post("/v1/hive/observe", json={
+        "conversation_id": cid, "reply": "Access tokens rotate every 90 days."})
+    r = c.post("/v1/commands/run", json={
+        "line": f"/save demo-{cid}", "conversation_id": cid}).json()
+    assert r["kind"] == "success" and "saved" in r["text"]
+    path = Path(r["text"].split()[-1])
+    content = path.read_text(encoding="utf-8")
+    assert "refresh token is 3600s" in content
+    assert "rotate every 90 days" in content
+    assert content.startswith("# Conversation transcript")
+
+
+def test_command_save_nothing_to_save(client):
+    c, _app = client
+    r = c.post("/v1/commands/run", json={
+        "line": "/save", "conversation_id": "empty-conv"}).json()
+    assert r["kind"] == "error" and "nothing to save" in r["text"]
+
+
+def test_command_status_and_provider_listing(client):
+    c, _app = client
+    r = c.post("/v1/commands/run", json={
+        "line": "/status", "conversation_id": "x"}).json()
+    assert r["kind"] == "success" and "server:" in r["text"]
+    listing = c.post("/v1/commands/run", json={
+        "line": "/provider", "conversation_id": "x"}).json()
+    assert listing["kind"] == "success"
+
+
 # ---------------------------------------------------------------------------
 # protocol runner + report reader
 # ---------------------------------------------------------------------------

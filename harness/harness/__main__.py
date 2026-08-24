@@ -10,7 +10,7 @@ import uvicorn
 from backend.providers import providers_path
 from cortex.e2e import FakeUltraSmall, MockTransport
 from harness.app import DEFAULT_PORT, OpenAICompatBackend, create_app
-from harness.models import LlamaServerManager
+from harness.models import launch_extra_args, LlamaServerManager
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -48,7 +48,15 @@ def main(argv: list[str] | None = None) -> int:
         "--no-auto-start", action="store_true",
         help="do not auto-launch llama-server even when a local model exists",
     )
+    parser.add_argument(
+        "--setup", action="store_true",
+        help="guided first-run check: create providers.local.json if missing, "
+             "probe for a reachable backend, and print the next command",
+    )
     args = parser.parse_args(argv)
+
+    if args.setup:
+        return _setup(providers_path(args.providers_file or None))
 
     kwargs = {
         "providers_file": providers_path(args.providers_file or None),
@@ -73,24 +81,99 @@ def main(argv: list[str] | None = None) -> int:
     )
     app = create_app(**kwargs)
 
-    # Auto-start the local llama.cpp server when a model is available
-    # (zero-step live usage; --no-auto-start opts out). Registration mirrors
-    # POST /v1/server/start so hive turns route to it immediately.
+    # Auto-start (or adopt) the local llama.cpp server when a model is
+    # available, reusing the saved launch settings from the engine profile
+    # (--no-auto-start opts out). Mirrors POST /v1/server/start.
     if not args.no_auto_start and not args.mock:
         manager = app.state.models
         try:
             local = manager.list_local()
-            if local and not manager.status()["running"]:
-                newest = local[0]["file"]
-                print(f"auto-start: launching llama-server with {newest}")
-                info = manager.start(model=newest, port=args.llama_port)
+            port_busy = manager.status()["running"]
+            if port_busy:
+                info = manager.start(model=None, port=args.llama_port)
                 app.state.register_local(info)
+                print(f"auto-start: adopted llama-server on port {info['port']}")
+            elif local:
+                newest = local[0]["file"]
+                load_options = {}
+                try:
+                    engine = app.state.harness.engines.resolve("local")
+                    load_options = dict(engine.load_options or {})
+                except LookupError:
+                    pass
+                print(f"auto-start: launching llama-server with {newest}")
+                info = manager.start(
+                    model=newest, port=args.llama_port,
+                    ctx_size=int(load_options.get("context", 8192)),
+                    ngl=int(load_options.get("gpu_layers", 999)),
+                    extra_args=launch_extra_args(load_options),
+                )
+                app.state.register_local(info, load_options=load_options)
                 print(f"auto-start: serving http://{manager.host}:{info['port']} "
                       f"(model: {info.get('model')})")
         except Exception as exc:  # noqa: BLE001 - never block boot on this
             print(f"auto-start: skipped ({exc})")
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    return 0
+
+
+def _setup(providers_file: Path) -> int:
+    """Guided first run: config, backend probe, next command."""
+    import shutil
+
+    from backend.providers import DEFAULT_PROVIDERS_FILE
+
+    print("HiveBench Studio — first-run setup")
+    print("-" * 46)
+
+    # 1. providers config
+    if not providers_file.exists():
+        example = Path("providers.example.json")
+        if example.exists():
+            providers_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(example, providers_file)
+            print(f"  [ok] created {providers_file} from providers.example.json")
+            print("       (default provider is 'lmstudio' on localhost:1234)")
+        else:
+            print(f"  [..] no providers.example.json found; using defaults "
+                  f"({DEFAULT_PROVIDERS_FILE} not required)")
+    else:
+        print(f"  [ok] providers config present: {providers_file}")
+
+    # 2. backend probe: LM Studio on :1234 (or a provider's base_url)
+    from backend.openai_compat import OpenAICompatBackend
+
+    found_backend = False
+    for label, base in (("LM Studio (localhost:1234)", "http://localhost:1234"),):
+        try:
+            ok = OpenAICompatBackend(base_url=base).health()
+        except Exception:  # noqa: BLE001
+            ok = False
+        print(f"  [{'ok' if ok else '..'}] {label}: "
+              f"{'reachable' if ok else 'not running'}")
+        found_backend = found_backend or ok
+
+    # 3. local llama-server binary (managed mode)
+    llama_bin = Path("tools/llama.cpp/llama-server.exe")
+    if llama_bin.exists():
+        print(f"  [ok] local llama-server found ({llama_bin}); "
+              "auto-start will serve models/gguf on :1234")
+    else:
+        print("  [..] no local llama-server (auto-start needs models/gguf)")
+
+    # 4. next step
+    print("-" * 46)
+    if found_backend:
+        print("Ready. Start the studio with:")
+        print("    python -m harness            # or: hivebench-harness")
+        print("Then open http://127.0.0.1:8765")
+    else:
+        print("No reachable backend yet. Either:")
+        print("  1. start LM Studio with a model loaded (localhost:1234), or")
+        print("  2. drop GGUF files into models/gguf and run:")
+        print("     python -m harness")
+        print("     (auto-start will launch llama-server for you)")
     return 0
 
 

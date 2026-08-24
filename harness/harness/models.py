@@ -101,6 +101,72 @@ def _port_in_use(host: str, port: int, timeout: float = 1.0) -> bool:
         return False
 
 
+def _pid_listening_on(port: int) -> Optional[int]:
+    """Pid of whatever process LISTENs on this port (best effort)."""
+    try:
+        import psutil
+
+        for conn in psutil.net_connections(kind="inet"):
+            if (conn.status == psutil.CONN_LISTEN and conn.laddr
+                    and conn.laddr.port == port and conn.pid):
+                return conn.pid
+    except Exception:  # noqa: BLE001 - psutil limits are environment-specific
+        return None
+    return None
+
+
+def _process_name(pid: Optional[int]) -> str:
+    if not pid:
+        return ""
+    try:
+        import psutil
+
+        return psutil.Process(pid).name() or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _terminate_pid(pid: int) -> None:
+    try:
+        import psutil
+
+        proc = psutil.Process(pid)
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except Exception:  # noqa: BLE001
+            proc.kill()
+    except Exception:  # noqa: BLE001 - already gone
+        pass
+
+
+def launch_extra_args(load_options: dict) -> list[str]:
+    """llama-server argv extras recorded in an engine profile's load_options
+    (shared by the start endpoint, /model command, and CLI auto-start)."""
+    args: list[str] = []
+    if load_options.get("threads"):
+        args += ["-t", str(load_options["threads"])]
+    if load_options.get("flash_attn"):
+        args += ["-fa", "on"]
+    if load_options.get("parallel_slots"):
+        args += ["-np", str(load_options["parallel_slots"])]
+    if load_options.get("cache_type_k"):
+        args += ["--cache-type-k", load_options["cache_type_k"]]
+    if load_options.get("cache_type_v"):
+        args += ["--cache-type-v", load_options["cache_type_v"]]
+    if load_options.get("batch_size"):
+        args += ["-b", str(load_options["batch_size"])]
+    if load_options.get("ubatch_size"):
+        args += ["-ub", str(load_options["ubatch_size"])]
+    if load_options.get("alias"):
+        args += ["--alias", load_options["alias"]]
+    if load_options.get("mlock"):
+        args += ["--mlock"]
+    if load_options.get("no_mmap"):
+        args += ["--no-mmap"]
+    return args
+
+
 class LlamaServerManager:
     """One llama-server process, its downloads, and the local model library."""
 
@@ -165,9 +231,10 @@ class LlamaServerManager:
         with self._lock:
             meta = dict(self._meta)
             proc_alive = self._proc is not None and self._proc.poll() is None
-        running = bool(meta.get("running")) and proc_alive
+        running = bool(meta.get("running")) and (proc_alive or meta.get("adopted"))
         info = {
             "running": running,
+            "adopted": bool(meta.get("adopted")),
             "binary": str(self.binary),
             "binary_found": self.binary.is_file(),
             "port": meta.get("port", self.port),
@@ -183,6 +250,9 @@ class LlamaServerManager:
             info["healthy"] = bool(probe)
             if probe and probe is not True:
                 info["model"] = probe
+            if not info["healthy"] and meta.get("adopted"):
+                # an adopted server that stopped answering is gone
+                info["running"] = False
         else:
             info["healthy"] = False
         return info
@@ -218,13 +288,35 @@ class LlamaServerManager:
             )
         use_port = int(port) if port else self.port
 
-        # Pre-flight: another OpenAI-compatible server on this port (LM Studio
-        # is the classic case) would make the health probe detect *it* instead
-        # of our own process — refuse loudly instead of misattributing health.
+        # Pre-flight: something is already on this port. If it is a healthy
+        # llama-server, ADOPT it (sidecar restarts must not orphan or fight
+        # their own server); anything else is refused loudly.
         if _port_in_use(self.host, use_port):
+            base_url = f"http://{self.host}:{use_port}"
+            listener_pid = _pid_listening_on(use_port)
+            listener_name = _process_name(listener_pid)
+            try:
+                probe = self.prober(base_url)
+            except Exception:  # noqa: BLE001 - a broken squatter is not ours
+                probe = False
+            if probe and "llama" in listener_name.lower():
+                with self._lock:
+                    self._proc = None
+                    self._meta = {
+                        "running": True,
+                        "adopted": True,
+                        "pid": listener_pid,
+                        "port": use_port,
+                        "model": (probe if probe is not True
+                                  else (resolved.name if resolved
+                                        else (hf_file or ""))),
+                        "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    }
+                return self.status()
             raise RuntimeError(
-                f"port {use_port} is already serving (LM Studio running?). "
-                f"Stop it or pass port=<free port>."
+                f"port {use_port} is already serving"
+                + (f" (pid {listener_pid}: {listener_name})" if listener_pid else "")
+                + "; stop it or pass port=<free port>."
             )
 
         cmd = [str(self.binary)]
@@ -295,7 +387,8 @@ class LlamaServerManager:
     def stop(self) -> dict:
         with self._lock:
             proc, self._proc = self._proc, None
-            self._meta = {}
+            meta, self._meta = self._meta, {}
+        adopted_pid = meta.get("pid") if meta.get("adopted") else None
         if proc is not None:
             try:
                 proc.terminate()
@@ -305,6 +398,8 @@ class LlamaServerManager:
                     proc.kill()
             except Exception:  # noqa: BLE001 - already gone
                 pass
+        elif adopted_pid:
+            _terminate_pid(int(adopted_pid))
         return {"ok": True}
 
     # ------------------------------------------------------------------
@@ -335,6 +430,45 @@ class LlamaServerManager:
             if e.get("path", "").endswith(".gguf")
             and not e["path"].startswith("mmproj")
         ]
+
+    def delete_local(self, file: str) -> dict:
+        """Remove one GGUF from the local library (path-traversal safe)."""
+        root = self.models_dir.resolve()
+        target = (root / file).resolve()
+        if root not in target.parents and target != root:
+            raise ValueError("file must stay inside the models directory")
+        if not target.is_file():
+            raise FileNotFoundError(f"no such model file: {file}")
+        target.unlink()
+        return {"ok": True, "deleted": str(target)}
+
+    def server_log(self, tail: int = 120) -> list[str]:
+        """Last lines of the llama-server log (startup errors live here)."""
+        path = self.log_dir / "llama_server.log"
+        if not path.is_file():
+            return []
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        return lines[-max(1, tail):]
+
+    def server_metrics(self) -> dict:
+        """Proxy llama-server's prometheus /metrics (kv usage, throughput)."""
+        base = f"http://{self.host}:{self._meta.get('port', self.port)}"
+        try:
+            resp = requests.get(f"{base}/metrics", timeout=3)
+        except requests.RequestException:
+            return {"available": False}
+        if not resp.ok:
+            return {"available": False}
+        gauges = {}
+        for line in resp.text.splitlines():
+            if line.startswith("#") or " " not in line:
+                continue
+            key, _, value = line.partition(" ")
+            try:
+                gauges[key] = float(value)
+            except ValueError:
+                continue
+        return {"available": True, "gauges": gauges}
 
     def downloads_status(self) -> list[dict]:
         return [job.to_dict() for job in self._downloads.values()]

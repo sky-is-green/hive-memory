@@ -37,10 +37,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
+import requests
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel
+import queue
+
+from harness.agent import DshAgentService
+from harness.commands import ConsoleCommands
 
 from backend.cache_manager import KVCacheManager
 from backend.engines import (
@@ -108,6 +113,10 @@ _popen = subprocess.Popen  # module-level so tests can intercept
 
 # HTML consoles change with the code; never let a browser cache them.
 _NO_STORE = {"Cache-Control": "no-store"}
+
+# Streaming upstream (llama-server / any OpenAI-compatible provider); module
+# level so tests can inject a fake SSE transport.
+_upstream_stream = requests.post
 
 
 class _State:
@@ -312,13 +321,16 @@ class ServerStartRequest(BaseModel):
     alias: Optional[str] = None
     mlock: bool = False
     no_mmap: bool = False
+    api_key: Optional[str] = None  # protect llama-server (--api-key)
 
     def extra_args(self) -> list[str]:
         args: list[str] = []
         if self.threads:
             args += ["-t", str(self.threads)]
         if self.flash_attn:
-            args += ["-fa"]
+            # current llama.cpp: -fa takes on|off|auto (a bare -fa would eat
+            # the next flag as its value)
+            args += ["-fa", "on"]
         if self.parallel_slots:
             args += ["-np", str(self.parallel_slots)]
         if self.cache_type_k:
@@ -335,6 +347,8 @@ class ServerStartRequest(BaseModel):
             args += ["--mlock"]
         if self.no_mmap:
             args += ["--no-mmap"]
+        if self.api_key:
+            args += ["--api-key", self.api_key]
         return args
 
     def load_options(self) -> dict:
@@ -360,6 +374,23 @@ class HubDownloadRequest(BaseModel):
     file: str
 
 
+class StreamTurnRequest(BaseModel):
+    query: str
+    conversation_id: str = "default"
+    engine: Optional[str] = None
+    config: Optional[dict] = None
+
+
+class AgentMessageRequest(BaseModel):
+    message: str
+    conversation_id: str = "default"
+
+
+class CommandRunRequest(BaseModel):
+    line: str
+    conversation_id: str = "default"
+
+
 class EngineEntry(BaseModel):
     name: str
     kind: str = "lmstudio"
@@ -376,8 +407,21 @@ class EngineConfigRequest(BaseModel):
 
 
 def _cors_origins() -> list[str]:
+    """Console origins. Default: localhost dev origins only — agent mode can
+    execute code, so blanket CORS (*) is opt-in via HARNESS_CORS_ORIGINS=*."""
     raw = os.environ.get("HARNESS_CORS_ORIGINS", "").strip()
-    return [o.strip() for o in raw.split(",") if o.strip()] or ["*"]
+    if raw == "*":
+        return ["*"]
+    if raw:
+        return [o.strip() for o in raw.split(",") if o.strip()]
+    return ["http://localhost:5173", "http://127.0.0.1:5173",
+            "http://localhost:3000", "http://127.0.0.1:3000",
+            "http://localhost:8765", "http://127.0.0.1:8765"]
+
+
+def _required_token() -> str:
+    """When HARNESS_TOKEN is set, /v1/* mutations require this bearer token."""
+    return os.environ.get("HARNESS_TOKEN", "").strip()
 
 
 def create_app(
@@ -417,6 +461,19 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def token_guard(request: Request, call_next):
+        required = _required_token()
+        if required and request.url.path.startswith("/v1/"):
+            supplied = request.headers.get("x-hive-token", "")
+            if supplied != required:
+                from fastapi.responses import JSONResponse
+
+                return JSONResponse({"detail": "invalid or missing token"},
+                                    status_code=401)
+        return await call_next(request)
+
     st = _State(
         ultra_factory=ultra_factory or _default_ultra,
         backend_factory=backend_factory or _default_backend,
@@ -519,6 +576,100 @@ def create_app(
             stored = True
         return {"ok": True, "stored": stored, "turn": hive.turn}
 
+    # ------------------------------------------------------------------
+    # Streaming chat (LM-Studio-style token stream) THROUGH the hive:
+    # curate -> stream the provider's SSE -> observe the reply back into
+    # the store. Events: {type: meta|delta|done|error}.
+    @app.post("/v1/hive/stream")
+    async def hive_stream(req: StreamTurnRequest):
+        query = (req.query or "").strip()
+        if not query:
+            raise HTTPException(422, "query must not be empty")
+        try:
+            provider = st.registry.resolve(None)
+        except LookupError:
+            raise HTTPException(502, "no provider configured; start a local "
+                                     "server or configure one")
+        base_url = provider.base_url.rstrip("/")
+        headers = {"Authorization": f"Bearer {provider.api_key or 'lm-studio'}",
+                   **provider.extra_headers}
+        hive = st.hive_for(req.conversation_id, req.config, with_backend=False)
+        with st.lock_for(req.conversation_id):
+            result = hive.process_turn(query, conversation_id=req.conversation_id)
+            st.save_conversation(req.conversation_id, hive)
+        assembled = result.assembled
+        curated = assembled.content if assembled is not None else ""
+        payload = {
+            "model": provider.model or "local",
+            "messages": [
+                {"role": "system", "content": curated or "You are a helpful assistant."},
+                {"role": "user", "content": query},
+            ],
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            **(hive.config.sampling or {}),
+        }
+        if hive.config.max_tokens:
+            payload["max_tokens"] = hive.config.max_tokens
+
+        def sse():
+            yield "data: " + json.dumps({
+                "type": "meta", "turn": result.turn,
+                "token_count": result.token_count, "budget": result.budget,
+                "curated_chars": len(curated), "mode": result.mode,
+            }) + "\n\n"
+
+            started = time.time()
+            parts: list[str] = []
+            usage: dict = {}
+            try:
+                resp = _upstream_stream(
+                    f"{base_url}/v1/chat/completions", json=payload,
+                    headers=headers, stream=True, timeout=600,
+                )
+                resp.raise_for_status()
+                for raw in resp.iter_lines(decode_unicode=True):
+                    if not raw:
+                        continue
+                    line = raw[6:].strip() if raw.startswith("data:") else raw.strip()
+                    if not line or line == "[DONE]":
+                        continue
+                    try:
+                        chunk = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    usage = chunk.get("usage") or usage
+                    for choice in chunk.get("choices") or []:
+                        delta = choice.get("delta") or {}
+                        text = delta.get("content")
+                        if text:
+                            parts.append(text)
+                            yield "data: " + json.dumps({
+                                "type": "delta", "text": text}) + "\n\n"
+            except Exception as exc:  # noqa: BLE001 - surfaced as an event
+                yield "data: " + json.dumps({
+                    "type": "error", "error": str(exc)}) + "\n\n"
+
+            reply = "".join(parts)
+            stored = False
+            if reply.strip() and not (
+                hive.config.filter_hedge_replies
+                and Hive._is_hedge_reply(reply)
+            ):
+                hive.store.add_chunk(hive.turn, reply)
+                st.save_conversation(req.conversation_id, hive)
+                stored = True
+            elapsed = max(time.time() - started, 1e-6)
+            completion_tokens = (usage or {}).get("completion_tokens") or 0
+            yield "data: " + json.dumps({
+                "type": "done", "stored": stored,
+                "tokens": completion_tokens,
+                "seconds": round(elapsed, 2),
+                "tokens_per_sec": round(completion_tokens / elapsed, 1)
+                if completion_tokens else None,
+            }) + "\n\n"
+
+        return StreamingResponse(sse(), media_type="text/event-stream")
 
     @app.get("/v1/hive/defaults")
     def hive_defaults():
@@ -805,7 +956,8 @@ def create_app(
                                             port=llama_port)
     app.state.models = models_manager
 
-    def register_local(info: dict, load_options: Optional[dict] = None) -> None:
+    def register_local(info: dict, load_options: Optional[dict] = None,
+                       api_key: Optional[str] = None) -> None:
         """Point the app at a manager-started llama-server: provider `local`
         + engine profile with the real launch options. Shared by the start
         endpoint and CLI auto-start so both paths route identically."""
@@ -813,7 +965,7 @@ def create_app(
             return
         base_url = f"http://{models_manager.host}:{info['port']}"
         prov = Provider(name="local", base_url=base_url,
-                        api_key="lm-studio",
+                        api_key=api_key or "lm-studio",
                         model=str(info.get("model") or ""))
         st.registry.providers = [
             p for p in st.registry.providers if p.name.lower() != "local"
@@ -831,12 +983,103 @@ def create_app(
         ] + [profile]
         if not st.engines.default:
             st.engines.default = "local"
+        # persist so CLI auto-start (and /model) reuse these launch settings
+        try:
+            save_engines(st.engines, st.engines_file)
+        except OSError as exc:
+            print(f"harness: could not persist engines config ({exc})",
+                  file=sys.stderr)
 
     app.state.register_local = register_local
+
+    agent_service = DshAgentService(
+        default_cwd=REPO_ROOT,
+        session_root=REPO_ROOT / "harness_state" / "dsh_sessions",
+    )
+    app.state.agent = agent_service
+
+    commands = ConsoleCommands(
+        st=st,
+        models=models_manager,
+        agent=agent_service,
+        transcripts_dir=REPO_ROOT / "transcripts",
+    )
+    commands._app = app  # register_local lives on the app instance
+    app.state.commands = commands
+
+    @app.get("/v1/commands")
+    def list_commands():
+        return {"commands": commands.descriptors()}
+
+    @app.post("/v1/commands/run")
+    def run_command(req: CommandRunRequest):
+        result = commands.run(req.line, req.conversation_id)
+        return result.to_dict()
+
+    @app.post("/v1/agent/stream")
+    async def agent_stream(req: AgentMessageRequest):
+        message = (req.message or "").strip()
+        if not message:
+            raise HTTPException(422, "message must not be empty")
+        try:
+            provider = st.registry.resolve(None)
+        except LookupError as exc:
+            raise HTTPException(502, str(exc))
+        base_url = provider.base_url.rstrip("/") + "/v1"
+        q: "queue.Queue[dict]" = queue.Queue()
+
+        def worker():
+            try:
+                out = agent_service.run_turn(
+                    req.conversation_id, message,
+                    base_url=base_url,
+                    api_key=provider.api_key or "lm-studio",
+                    model=provider.model or "local",
+                    on_event=q.put,
+                )
+                q.put({"type": "done", **out})
+            except Exception as exc:  # noqa: BLE001 - surfaced as an event
+                q.put({"type": "error", "error": str(exc)})
+
+        threading.Thread(target=worker, daemon=True).start()
+
+        def sse():
+            while True:
+                event = q.get()
+                yield "data: " + json.dumps(event, default=str) + "\n\n"
+                if event.get("type") in ("done", "error"):
+                    return
+
+        return StreamingResponse(sse(), media_type="text/event-stream")
+
+    @app.get("/v1/agent/status")
+    def agent_status():
+        return {"runtime_running": agent_service.runtime_running,
+                "permission_policy": agent_service.permission_policy,
+                "busy": agent_service._inflight}
+
+    @app.post("/v1/agent/cancel")
+    def agent_cancel():
+        return agent_service.cancel()
 
     @app.get("/v1/server/status")
     def server_status():
         return models_manager.status()
+
+    @app.get("/v1/server/log")
+    def server_log(tail: int = 120):
+        return {"lines": models_manager.server_log(tail)}
+
+    @app.get("/v1/server/metrics")
+    def server_metrics():
+        return models_manager.server_metrics()
+
+    @app.delete("/v1/models/local")
+    def delete_local_model(file: str = Query(...)):
+        try:
+            return models_manager.delete_local(file)
+        except (ValueError, FileNotFoundError) as exc:
+            raise HTTPException(400, str(exc))
 
     @app.post("/v1/server/stop")
     def server_stop():
@@ -859,7 +1102,8 @@ def create_app(
                 code = 400
             raise HTTPException(code, message)
         if req.register_provider:
-            register_local(info, load_options=req.load_options())
+            register_local(info, load_options=req.load_options(),
+                           api_key=req.api_key)
         return {**info, "provider_registered": bool(req.register_provider)}
 
     @app.get("/v1/models/local")

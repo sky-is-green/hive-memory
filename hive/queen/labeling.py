@@ -24,7 +24,7 @@ import random
 import re
 from pathlib import Path
 
-from tests.fixtures.synthetic_conversations.generate import TOPICS
+from queen.topics import TOPICS
 
 DEFAULT_LABEL_DIR = Path(__file__).resolve().parents[2] / "hivebench" / "tests" / "fixtures" / "labels"
 

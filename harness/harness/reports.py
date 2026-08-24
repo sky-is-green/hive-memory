@@ -1,10 +1,15 @@
-﻿"""Server-rendered report views (Seam B) â€” plain HTML, no JS dependencies.
+﻿"""Server-rendered report views (Seam B) + the Studio console page.
 
-Renders one ``run_report.json`` bundle: the post-run PES headline with its
-weighted components, the P1â€“P10 verdict table, the deterministic P2 retrieval
-diagnostic, comb (P11) totals, and the baselines comparison. Every dynamic
-value is HTML-escaped; missing blocks render as em dashes rather than erroring,
-so partial bundles from in-flight runs stay viewable.
+Plain HTML, no JS dependencies. Renders one ``run_report.json`` bundle: the
+post-run PES headline with its weighted components, the P1–P11 verdict table,
+the deterministic P2 retrieval diagnostic, comb (P11) totals, and the
+baselines comparison. Every dynamic value is HTML-escaped; missing blocks
+render as em dashes rather than erroring, so partial bundles from in-flight
+runs stay viewable.
+
+This file is UTF-8 and must stay that way — it contains arrows, stars and
+ellipses in the console UI. Never round-trip it through PowerShell text
+cmdlets (they decode as ANSI on Windows and mojibake every non-ASCII char).
 """
 
 from __future__ import annotations
@@ -14,7 +19,7 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
-# Paper weights for the PES composite (README Â§3.1).
+# Paper weights for the PES composite (README §3.1).
 _PES_COMPONENTS = [
     ("retrieval_precision", 0.30),
     ("routing_accuracy", 0.20),
@@ -129,7 +134,7 @@ def render_report_page(report: dict, run_name: str) -> str:
     comb = report.get("comb") if isinstance(report.get("comb"), dict) else {}
     comb_t = _comb_totals(comb)
     # generate_data has used two shapes across versions: composite/components
-    # and pes/breakdown â€” accept both.
+    # and pes/breakdown — accept both.
     composite = post.get("composite", post.get("pes"))
     components = post.get("components")
     if not isinstance(components, dict):
@@ -140,11 +145,10 @@ def render_report_page(report: dict, run_name: str) -> str:
 
     def _band_class() -> str:
         if band:
-            cls = _BAND_FLOORS[0][1]
             for token in ("green", "yellow", "red", "critical"):
                 if token in band.lower():
                     return f"band-{token}"
-            return cls
+            return ""
         return _pes_band_class(composite)
 
     protocol_rows = "".join(
@@ -235,7 +239,7 @@ def render_runs_page(entries: list[dict]) -> str:
     items = "".join(
         f"<li><a href='/view/{_esc(e['name'])}'><code>{_esc(e['name'])}</code></a> "
         f"<span class='note'>modified {_esc(e['modified'])}"
-        f"{'' if e['has_report'] else ' Â· no run_report.json yet'}</span></li>"
+        f"{'' if e['has_report'] else ' · no run_report.json yet'}</span></li>"
         for e in entries
     ) or "<li class='note'>no runs yet</li>"
     return f"""<!doctype html>
@@ -258,7 +262,8 @@ _SERVER_CSS = _CSS + """
          gap: 1rem; align-items: start; }
  @media (max-width: 1150px) { .grid { grid-template-columns: 1fr; } }
  .col { min-width: 0; }
- input, button { font: inherit; padding: .35rem .6rem; margin: .15rem .3rem .15rem 0; }
+ input, button, select { font: inherit; padding: .35rem .6rem;
+        margin: .15rem .3rem .15rem 0; }
  button { cursor: pointer; }
  pre { background: #eef2f6; padding: .7rem; border-radius: 6px;
        white-space: pre-wrap; word-break: break-word; font-size: .82rem;
@@ -286,10 +291,14 @@ _SERVER_CSS = _CSS + """
  .msg .meta { display: block; font-size: .72rem; color: #8a99a8;
               margin-top: .3rem; }
  .msg.user .meta { color: rgba(255,255,255,.75); }
+ .msg.sys { align-self: center; background: #eef2f6; color: #5a6b7d;
+        font-size: .8rem; padding: .25rem .7rem; border-radius: 999px; }
  #chatin { flex: 1; }
+ #stopbtn { background: #b3372c; color: #fff; border: none; }
  /* settings tabs */
  .tabs { display: flex; gap: .25rem; margin-bottom: .6rem; }
- .tab { border: 1px solid #cfd8e0; background: #eef2f6; border-radius: 6px 6px 0 0; }
+ .tab { border: 1px solid #cfd8e0; background: #eef2f6;
+        border-radius: 6px 6px 0 0; }
  .tab.active { background: #fff; font-weight: 600; border-bottom-color: #fff; }
  .tabpane { animation: fadein .15s ease; }
  @keyframes fadein { from { opacity: .4; } to { opacity: 1; } }
@@ -300,13 +309,19 @@ _SERVER_CSS = _CSS + """
  details { margin: .3rem 0; }
  summary { cursor: pointer; color: #456; font-size: .88rem; }
  #prov-list input { margin: .12rem .15rem; }
+ .liblist .librow { display: flex; justify-content: space-between;
+        align-items: center; gap: .6rem; background: #eef2f6;
+        border-radius: 6px; padding: .35rem .6rem; margin: .25rem 0;
+        font-size: .88rem; }
+ .liblist .librow.loaded { outline: 2px solid #157a3e; }
+ .librow button { padding: .05rem .5rem; }
 """
 
 
 def render_server_page() -> str:
     """Model-management console: server + settings | loaded-model chat | hub.
 
-    Discovery is live against the Hugging Face hub API â€” no model catalog is
+    Discovery is live against the Hugging Face hub API — no model catalog is
     hardcoded here."""
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>Studio server &amp; models</title>
@@ -315,7 +330,7 @@ def render_server_page() -> str:
 
 <div class="grid">
 
-<!-- ==================== LEFT: tabs (server/engines/hive/providers) === -->
+<!-- ==================== LEFT: tabs ==================== -->
 <div class="col">
 <div class="tabs">
 <button class="tab active" data-tab="tab-server">Server</button>
@@ -333,7 +348,8 @@ def render_server_page() -> str:
 <span class="sugwrap"><input id="model" placeholder="local model (blank = ok w/ hf)" size="26" list="local-suggestions">
 <datalist id="local-suggestions"></datalist></span>
 <label class="inline">ctx <input id="ctx" type="number" value="8192" size="4"></label>
-<label class="inline">gpu <input id="ngl" type="number" value="999" size="3"></label><br>
+<label class="inline">gpu <input id="ngl" type="number" value="999" size="3"></label>
+<label class="inline">api-key <input id="l-apikey" size="10" placeholder="(none)"></label><br>
 <span class="sugwrap"><input id="hfrepo" placeholder="--hf-repo (type to search)" size="30"
        list="repo-suggestions">
 <div class="sugbox" id="sug-hfrepo"></div></span>
@@ -355,12 +371,13 @@ def render_server_page() -> str:
 <label class="inline">alias <input id="l-alias" size="14" placeholder="model id"></label>
 </div>
 </details>
-<pre id="status">loadingâ€¦</pre>
+<pre id="status">loading…</pre>
+<pre id="srvlog" title="llama_server.log tail">log: loading…</pre>
 </section>
 
 <section>
 <h2 style="margin-top:0">Local library <span class="note">(models/gguf)</span></h2>
-<pre id="local">loadingâ€¦</pre>
+<div id="local" class="liblist">loading…</div>
 </section>
 </div>
 
@@ -410,7 +427,7 @@ def render_server_page() -> str:
 <div id="tab-hive" class="tabpane" style="display:none">
 <section>
 <h2 style="margin-top:0">Hive tuning <span class="note">(new conversations)</span></h2>
-<div class="note">Applied when a conversation is created â€” hit
+<div class="note">Applied when a conversation is created — hit
 "New conversation" in the chat pane after changing.</div>
 <div class="row">
 <label class="inline">max_context <input id="h-maxctx" type="number" size="6"></label>
@@ -418,9 +435,9 @@ def render_server_page() -> str:
 </div>
 <div class="row">
 <label class="inline">stale wall <input id="h-stale" type="number" size="3"></label>
-<label class="inline">dedup &ge; <input id="h-dedup" type="number" step="0.01" size="4"></label>
-<label class="inline">drift &ge; <input id="h-drift" type="number" step="0.05" size="4"></label>
-<label class="inline">remem &ge; <input id="h-remem" type="number" step="0.05" size="4"></label>
+<label class="inline">dedup <input id="h-dedup" type="number" step="0.01" size="4"></label>
+<label class="inline">drift <input id="h-drift" type="number" step="0.05" size="4"></label>
+<label class="inline">remem <input id="h-remem" type="number" step="0.05" size="4"></label>
 </div>
 <div class="row">
 <label class="inline">vocab boost <input id="h-vocab" type="number" step="0.05" size="4"></label>
@@ -436,7 +453,7 @@ def render_server_page() -> str:
 <div class="row">
 <label class="inline"><input id="h-comb" type="checkbox"> enabled</label>
 <label class="inline">top_k <input id="h-combk" type="number" size="3"></label>
-<label class="inline">gate &ge; <input id="h-combgate" type="number" step="0.05" size="4"></label>
+<label class="inline">gate <input id="h-combgate" type="number" step="0.05" size="4"></label>
 <label class="inline">max records <input id="h-combmax" type="number" size="5"></label>
 <label class="inline"><input id="h-combrel" type="checkbox"> curated-only</label>
 </div>
@@ -454,7 +471,7 @@ def render_server_page() -> str:
 <button onclick="providerAdd()">+ Add provider</button>
 <button onclick="saveProviders()">Save providers</button>
 <span id="prov-msg" class="note"></span></div>
-<div class="note">Keys echo as *** â€” leave untouched rows as-is to keep the
+<div class="note">Keys echo as *** — leave untouched rows as-is to keep the
 stored secret; type a new key to replace it. Saved to
 providers.local.json (gitignored).</div>
 </section>
@@ -466,15 +483,22 @@ providers.local.json (gitignored).</div>
 <section style="display:flex; flex-direction:column;">
 <div class="row" style="display:flex; justify-content:space-between; align-items:center;">
 <h2 style="margin:0" id="chat-title">Loaded model</h2>
+<div>
+<span class="modesel">
+<label class="inline"><input type="radio" name="chatmode" value="hive" checked> Hive</label>
+<label class="inline"><input type="radio" name="chatmode" value="agent"> Agent (dsh)</label>
+</span>
 <button onclick="newConversation()">New conversation</button></div>
 <div id="chatlog" class="chatlog"></div>
 <div class="row" style="display:flex; gap:.4rem;">
-<input id="chatin" placeholder="Talk to the loaded AIâ€¦" style="flex:1;"
-       onkeydown="if (event.key === 'Enter') sendChat()">
-<button onclick="sendChat()">Send</button></div>
-<div class="note">Every message runs through the hive: context curation,
-store, decay â€” the same pipeline the benchmarks measure. Hive-tab settings
-apply to new conversations.</div>
+<span class="sugwrap" style="flex:1; display:flex;"><input id="chatin" placeholder="Talk to the loaded AI…  (/ for commands)" style="flex:1;"
+       onkeydown="if (event.key === 'Enter') chatSubmit()" autocomplete="off">
+<div class="sugbox" id="sug-chat"></div></span>
+<button id="sendbtn" onclick="chatSubmit()">Send</button>
+<button id="stopbtn" style="display:none" onclick="cancelAgent()">Stop</button></div>
+<div class="note"><b>Hive</b>: direct curated generation. <b>Agent (dsh)</b>:
+the full DeepSeek Harness agent loop — bash/files/code tools, multi-step
+turns, durable session log — pointed at the loaded model.</div>
 </section>
 </div>
 
@@ -482,7 +506,7 @@ apply to new conversations.</div>
 <div class="col">
 <section>
 <h2 style="margin-top:0">Hugging Face hub <span class="note">(live)</span></h2>
-<div class="row"><span class="sugwrap" style="width:100%"><input id="q" placeholder="search gguf reposâ€¦" style="width:100%"
+<div class="row"><span class="sugwrap" style="width:100%"><input id="q" placeholder="search gguf repos…" style="width:100%"
        list="repo-suggestions">
 <div class="sugbox" id="sug-q"></div></span></div>
 <datalist id="repo-suggestions"></datalist>
@@ -508,10 +532,17 @@ let hiveOverrides = {{}};
 let engDirty = false;
 
 async function api(path, method, body) {{
-  const r = await fetch(path, {{method: method || 'GET',
-    headers: {{'content-type': 'application/json'}},
+  const headers = {{'content-type': 'application/json'}};
+  const token = localStorage.getItem('hive-token');
+  if (token) headers['x-hive-token'] = token;
+  const r = await fetch(path, {{method: method || 'GET', headers,
     body: body === undefined ? (method === 'POST' ? '{{}}' : undefined)
                              : JSON.stringify(body)}});
+  if (r.status === 401) {{
+    const t = prompt('This server requires an access token (HARNESS_TOKEN):');
+    if (t !== null) {{ localStorage.setItem('hive-token', t); }}
+    throw new Error('unauthorized — token saved, retry');
+  }}
   const t = await r.text();
   if (!r.ok) throw new Error(r.status + ': ' + t.slice(0, 400));
   return t.startsWith('{{') ? JSON.parse(t) : t;
@@ -565,7 +596,7 @@ async function suggestRepos(value, targetId) {{
     name.textContent = r.repo;
     const meta = document.createElement('span');
     meta.className = 'meta';
-    meta.textContent = 'â†“' + r.downloads;
+    meta.textContent = '↓' + r.downloads;
     item.appendChild(name);
     item.appendChild(meta);
     item.addEventListener('mousedown', ev => {{
@@ -583,7 +614,7 @@ async function hubFiles(repo) {{
   const res = await api('/v1/models/hub/files/' + encodeURIComponent(repo));
   document.getElementById('drepo').value = repo;
   document.getElementById('dfile').value = res.files.length ? res.files[0].file : '';
-  const lines = res.files.map(f => `${{f.file}} â€” ${{f.size_gb}} GB`);
+  const lines = res.files.map(f => `${{f.file}} — ${{f.size_gb}} GB`);
   show('hub', `files in ${{repo}}:\\n${{lines.join('\\n') || '(none)'}}`);
 }}
 
@@ -625,38 +656,220 @@ function bubble(role, text, meta) {{
   }}
   log.appendChild(div);
   log.scrollTop = log.scrollHeight;
+  return div;
 }}
+
+function chatMode() {{
+  return document.querySelector('input[name="chatmode"]:checked').value;
+}}
+
+/* ------------------------- slash commands ---------------------------- */
+let chatCommands = [];
+
+async function loadChatCommands() {{
+  try {{
+    chatCommands = (await api('/v1/commands')).commands;
+  }} catch (e) {{ chatCommands = []; }}
+}}
+
+function chatSubmit() {{
+  const input = document.getElementById('chatin');
+  const text = input.value;
+  if (text.trim().startsWith('/')) {{
+    input.value = '';
+    hideSuggestions();
+    runCommand(text.trim());
+    return;
+  }}
+  sendChat();
+}}
+
+async function runCommand(line) {{
+  bubble('user', line);
+  try {{
+    const r = await api('/v1/commands/run', 'POST',
+                        {{line: line, conversation_id: convId}});
+    bubble('sys', (r.kind === 'error' ? '⚠ ' : '') + (r.text || r.kind));
+    if (r.new_conversation_id) {{
+      convId = r.new_conversation_id;
+      localStorage.setItem('hive-console-conv', convId);
+      document.getElementById('chatlog').innerHTML = '';
+    }}
+    if (r.mode) {{
+      const radio = document.querySelector(
+        `input[name="chatmode"][value="${{r.mode}}"]`);
+      if (radio) radio.checked = true;
+    }}
+  }} catch (e) {{
+    bubble('sys', 'command failed: ' + e.message);
+  }}
+}}
+
+document.getElementById('chatin').addEventListener('input', e => {{
+  const v = e.target.value;
+  const box = document.getElementById('sug-chat');
+  if (!v.startsWith('/')) {{ box.innerHTML = ''; return; }}
+  const query = v.slice(1).toLowerCase();
+  const matches = chatCommands.filter(c => c.name.startsWith(query));
+  box.innerHTML = '';
+  for (const cmd of matches) {{
+    const item = document.createElement('div');
+    item.className = 'sugitem';
+    const name = document.createElement('span');
+    name.textContent = '/' + cmd.name;
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    meta.textContent = cmd.description + (cmd.input ? ' ' + cmd.input.hint : '');
+    item.appendChild(name);
+    item.appendChild(meta);
+    item.addEventListener('mousedown', ev => {{
+      ev.preventDefault();
+      e.target.value = '/' + cmd.name + ' ';
+      box.innerHTML = '';
+      e.target.focus();
+    }});
+    box.appendChild(item);
+  }}
+}});
+
+loadChatCommands();
 
 async function sendChat() {{
   const input = document.getElementById('chatin');
   const query = input.value.trim();
   if (!query) return;
   input.value = '';
+  if (chatMode() === 'agent') return sendAgent(query);
   bubble('user', query);
-  bubble('ai', 'â€¦');
+  const ai = bubble('ai', '…');
   const body = {{query: query, conversation_id: convId}};
   if (Object.keys(hiveOverrides).length) body.config = hiveOverrides;
+  let text = '';
+  let turn = '?';
   try {{
-    const r = await api('/v1/hive/turn', 'POST', body);
-    const log = document.getElementById('chatlog');
-    log.lastChild.remove();
-    const who = r.mode === 'error' ? 'error' : 'hive-curated';
-    bubble('ai', r.reply || '(empty reply)',
-           `${{who}} Â· turn ${{r.turn}} Â· ${{r.token_count}}/${{r.budget}} tokens Â· pes ${{r.pes}}`
-           + (r.error ? ' Â· ' + r.error : ''));
+    const r = await fetch('/v1/hive/stream', {{method: 'POST',
+      headers: {{'content-type': 'application/json'}},
+      body: JSON.stringify(body)}});
+    if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    let metaText = '';
+    while (true) {{
+      const {{done, value}} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {{stream: true}});
+      let idx;
+      while ((idx = buf.indexOf('\\n\\n')) >= 0) {{
+        const frame = buf.slice(0, idx); buf = buf.slice(idx + 2);
+        if (!frame.startsWith('data: ')) continue;
+        const ev = JSON.parse(frame.slice(6));
+        if (ev.type === 'delta') {{
+          text += ev.text;
+          ai.textContent = text;
+          log_scroll();
+        }} else if (ev.type === 'meta') {{
+          turn = ev.turn;
+          metaText = `curated ${{ev.token_count}}/${{ev.budget}} tokens`;
+        }} else if (ev.type === 'done') {{
+          metaText = `hive-curated · turn ${{turn}}`
+            + (ev.tokens ? ` · ${{ev.tokens}} tok` : '')
+            + (ev.tokens_per_sec ? ` · ${{ev.tokens_per_sec}} tok/s` : '')
+            + (ev.stored ? '' : ' · not stored');
+        }} else if (ev.type === 'error') {{
+          metaText = 'error: ' + ev.error;
+        }}
+      }}
+    }}
+    ai.textContent = text || '(empty reply)';
+    const m = document.createElement('span');
+    m.className = 'meta';
+    m.textContent = metaText;
+    ai.appendChild(m);
   }} catch (e) {{
-    const log = document.getElementById('chatlog');
-    log.lastChild.remove();
-    bubble('ai', 'request failed: ' + e.message);
+    ai.textContent = 'request failed: ' + e.message;
   }}
+}}
+
+function setBusy(b) {{
+  document.getElementById('stopbtn').style.display = b ? '' : 'none';
+  document.getElementById('sendbtn').disabled = b;
+}}
+
+async function cancelAgent() {{
+  try {{ await api('/v1/agent/cancel', 'POST'); }} catch (e) {{}}
+}}
+
+async function sendAgent(query) {{
+  bubble('user', query);
+  bubble('sys', 'dsh agent starting…');
+  const ai = bubble('ai', '');
+  setBusy(true);
+  let text = '';
+  let finish = '';
+  try {{
+    const r = await fetch('/v1/agent/stream', {{method: 'POST',
+      headers: {{'content-type': 'application/json'}},
+      body: JSON.stringify({{message: query, conversation_id: convId}})}});
+    if (!r.ok || !r.body) {{
+      const t = await r.text();
+      throw new Error('HTTP ' + r.status + ' ' + t.slice(0, 200));
+    }}
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while (true) {{
+      const {{done, value}} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {{stream: true}});
+      let idx;
+      while ((idx = buf.indexOf('\\n\\n')) >= 0) {{
+        const frame = buf.slice(0, idx); buf = buf.slice(idx + 2);
+        if (!frame.startsWith('data: ')) continue;
+        const ev = JSON.parse(frame.slice(6));
+        if (ev.type === 'assistant') {{
+          text = ev.text;                       // committed per agent step
+          ai.textContent = text;
+          log_scroll();
+        }} else if (ev.type === 'tool') {{
+          bubble('sys', `tool ${{ev.phase}}: ${{ev.tool}}`);
+          log_scroll();
+        }} else if (ev.type === 'lifecycle') {{
+          /* turn/step boundaries stay quiet */
+        }} else if (ev.type === 'done') {{
+          finish = ev.finish_reason || 'end';
+          if (ev.final && ev.final !== text) {{
+            text = ev.final;
+            ai.textContent = text;
+          }}
+        }} else if (ev.type === 'error') {{
+          ai.textContent = 'agent error: ' + ev.error;
+          return;
+        }}
+      }}
+    }}
+    ai.textContent = text || '(no response)';
+    const m = document.createElement('span');
+    m.className = 'meta';
+    m.textContent = 'dsh agent · ' + finish;
+    ai.appendChild(m);
+  }} catch (e) {{
+    ai.textContent = 'agent request failed: ' + e.message;
+  }} finally {{
+    setBusy(false);
+  }}
+}}
+function log_scroll() {{
+  const log = document.getElementById('chatlog');
+  log.scrollTop = log.scrollHeight;
 }}
 
 async function newConversation() {{
   try {{ await api('/v1/hive/reset', 'POST', {{conversation_id: convId}}); }} catch (e) {{}}
   document.getElementById('chatlog').innerHTML = '';
-  bubble('ai', 'Fresh conversation â€” the store was reset.'
+  bubble('ai', 'Fresh conversation — the store was reset.'
     + (Object.keys(hiveOverrides).length
-       ? ' Hive overrides apply from the next message.' : ''), null);
+       ? ' Hive overrides apply from the next message.' : ''));
 }}
 
 /* --------------------------- server panel ---------------------------- */
@@ -667,6 +880,7 @@ function launchBody() {{
     hf_file: val('hffile') || null,
     ctx_size: +val('ctx') || 8192,
     ngl: +val('ngl') || 999,
+    api_key: val('l-apikey') || null,
     threads: num('l-threads'),
     flash_attn: document.getElementById('l-fa').checked,
     parallel_slots: num('l-parallel'),
@@ -689,12 +903,12 @@ async function startServer() {{
 }}
 
 async function searchHub() {{
-  show('hub', 'searchingâ€¦');
+  show('hub', 'searching…');
   try {{
     const res = await api('/v1/models/hub?q=' +
       encodeURIComponent(val('q')) + '&limit=12');
     show('hub', res.results.map(r =>
-      `${{r.repo}} Â· â†“${{r.downloads}} Â· â˜…${{r.likes}} Â· ${{r.last_modified}}`).join('\\n'));
+      `${{r.repo}} · ↓${{r.downloads}} · ★${{r.likes}} · ${{r.last_modified}}`).join('\\n'));
   }} catch (e) {{ show('hub', String(e)); }}
 }}
 
@@ -710,7 +924,8 @@ let engines = [];
 let engDefault = '';
 
 function samplingToForm(s) {{
-  const set = (id, v) => document.getElementById(id).value = (v === undefined || v === null) ? '' : v;
+  const set = (id, v) => document.getElementById(id).value =
+    (v === undefined || v === null) ? '' : v;
   set('s-temp', s.temperature); set('s-topp', s.top_p); set('s-topk', s.top_k);
   set('s-minp', s.min_p); set('s-rep', s.repeat_penalty);
   set('s-pres', s.presence_penalty); set('s-freq', s.frequency_penalty);
@@ -779,8 +994,7 @@ function renderEngineSelect(selectIndex) {{
 }}
 
 function collectEngines() {{
-  const i = currentEngineIndex();
-  const e = engines[i];
+  const e = engines[currentEngineIndex()];
   if (e) {{
     e.name = val('eng-name') || e.name;
     e.kind = document.getElementById('eng-kind').value;
@@ -803,7 +1017,8 @@ async function loadEngines() {{
 async function saveEngines() {{
   const list = collectEngines();
   const defName = document.getElementById('eng-default').checked
-    ? (val('eng-name') || engines[currentEngineIndex()]?.name || '') : engDefault;
+    ? (val('eng-name') || (engines[currentEngineIndex()] || {{}}).name || '')
+    : engDefault;
   try {{
     const r = await api('/v1/engines', 'POST',
       {{engines: list, default: defName, persist: true}});
@@ -816,24 +1031,23 @@ async function saveEngines() {{
 }}
 
 /* ----------------------------- hive tab ------------------------------ */
-const HIVE_FIELDS = ['max_context', 'max_tokens', 'stale_threshold',
-  'dedup_threshold', 'drift_threshold', 'remembrance_threshold',
-  'vocab_boost'];
+const HIVE_NUMERIC = [['max_context', 'h-maxctx'], ['max_tokens', 'h-maxtok'],
+  ['stale_threshold', 'h-stale'], ['dedup_threshold', 'h-dedup'],
+  ['drift_threshold', 'h-drift'], ['remembrance_threshold', 'h-remem'],
+  ['vocab_boost', 'h-vocab']];
 
 function hiveToForm(cfg) {{
-  const set = (id, v) => document.getElementById(id).value =
-    (v === undefined || v === null) ? '' : v;
-  set('h-maxctx', cfg.max_context); set('h-maxtok', cfg.max_tokens);
-  set('h-stale', cfg.stale_threshold); set('h-dedup', cfg.dedup_threshold);
-  set('h-drift', cfg.drift_threshold); set('h-remem', cfg.remembrance_threshold);
-  set('h-vocab', cfg.vocab_boost);
+  for (const [key, id] of HIVE_NUMERIC)
+    document.getElementById(id).value =
+      (cfg[key] === undefined || cfg[key] === null) ? '' : cfg[key];
   document.getElementById('h-conf').value = cfg.confidence_mode || 'off';
   document.getElementById('h-sanitize').checked = !!cfg.sanitize_context;
   document.getElementById('h-hedge').checked = !!cfg.filter_hedge_replies;
   document.getElementById('h-medium').checked = !!cfg.enable_medium;
   document.getElementById('h-comb').checked = !!cfg.comb_enabled;
-  set('h-combk', cfg.comb_top_k); set('h-combgate', cfg.comb_gate_threshold);
-  set('h-combmax', cfg.comb_max_records);
+  document.getElementById('h-combk').value = cfg.comb_top_k ?? '';
+  document.getElementById('h-combgate').value = cfg.comb_gate_threshold ?? '';
+  document.getElementById('h-combmax').value = cfg.comb_max_records ?? '';
   document.getElementById('h-combrel').checked = !!cfg.comb_relevant_only;
 }}
 
@@ -842,9 +1056,8 @@ function collectHiveOverrides() {{
   const defaults = window.__hiveDefaults || {{}};
   const changed = (key, value) => defaults[key] === undefined
     || JSON.stringify(defaults[key]) !== JSON.stringify(value);
-  for (const key of HIVE_FIELDS) {{
-    const v = num('h-' + (key === 'max_context' ? 'maxctx'
-      : key === 'max_tokens' ? 'maxtok' : key));
+  for (const [key, id] of HIVE_NUMERIC) {{
+    const v = num(id);
     if (v !== null && changed(key, v)) out[key] = v;
   }}
   const conf = document.getElementById('h-conf').value;
@@ -932,7 +1145,7 @@ function renderProviders() {{
     def.title = 'default provider';
     def.addEventListener('change', () => provDefault = p.name);
     const del = document.createElement('button');
-    del.textContent = 'âœ•'; del.title = 'remove';
+    del.textContent = '✕'; del.title = 'remove';
     del.addEventListener('click', () => {{
       providers.splice(i, 1); renderProviders(); }});
     const lbl = document.createElement('label');
@@ -943,7 +1156,8 @@ function renderProviders() {{
     row.appendChild(key); row.appendChild(del);
     wrap.appendChild(row);
   }});
-  if (!providers.length) wrap.innerHTML = '<div class="note">(none â€” add one)</div>';
+  if (!providers.length)
+    wrap.innerHTML = '<div class="note">(none — add one)</div>';
 }}
 
 function providerAdd() {{
@@ -978,13 +1192,41 @@ async function refresh() {{
       title.textContent = 'Loaded: ' + (s.model || 'model');
       title.className = 'ok';
     }} else {{
-      title.textContent = s.running ? 'Loadingâ€¦' : 'No model loaded';
+      title.textContent = s.running ? 'Loading…' : 'No model loaded';
       title.className = 'bad';
     }}
   }}).catch(e => show('status', String(e)));
-  api('/v1/models/local').then(l => show('local',
-    l.models.length ? l.models.map(m => `${{m.file}} â€” ${{m.size_gb}} GB`).join('\\n')
-                    : '(no .gguf files yet)')).catch(e => show('local', String(e)));
+  api('/v1/server/log?tail=30').then(l => {{
+    if (l.lines.length) show('srvlog', l.lines.join('\\n'));
+  }}).catch(() => {{}});
+  api('/v1/models/local').then(l => {{
+    const wrap = document.getElementById('local');
+    wrap.innerHTML = '';
+    if (!l.models.length) {{
+      wrap.textContent = '(no .gguf files yet)';
+      return;
+    }}
+    for (const m of l.models) {{
+      const row = document.createElement('div');
+      row.className = 'librow';
+      const label = document.createElement('span');
+      label.textContent = `${{m.file}} — ${{m.size_gb}} GB`;
+      const del = document.createElement('button');
+      del.textContent = 'delete';
+      del.title = 'remove from disk';
+      del.addEventListener('click', async () => {{
+        if (!confirm('Delete ' + m.file + ' from disk?')) return;
+        try {{
+          await api('/v1/models/local?file=' + encodeURIComponent(m.file),
+                    'DELETE');
+          refresh();
+        }} catch (e) {{ alert(String(e)); }}
+      }});
+      row.appendChild(label);
+      row.appendChild(del);
+      wrap.appendChild(row);
+    }}
+  }}).catch(e => {{ document.getElementById('local').textContent = String(e); }});
   api('/v1/models/hub/downloads').then(d => {{
     const lines = d.downloads.map(j => `${{j.filename}}: ${{j.state}} (${{j.elapsed_s}}s)`);
     if (lines.length) show('downloads', lines.join('\\n'));
@@ -994,6 +1236,8 @@ async function refresh() {{
 refresh();
 setInterval(refresh, 15000);
 loadHiveDefaults();
+document.getElementById('chatin').addEventListener('blur',
+  () => setTimeout(() => {{ document.getElementById('sug-chat').innerHTML = ''; }}, 150));
 document.getElementById('chatin').focus();
 </script>
 </body></html>"""
