@@ -60,12 +60,17 @@ quality. The head-to-head evidence above is what the claims rest on.*
 | Decode speed over 308+ turns | **Flat** (14.5→15.5 tps, +6.7%) | Slows as context grows, then truncates |
 | Stated-fact recall (deterministic) | **90.3%** | Facts dropped at window limit |
 | Turns where hive ≥ FIFO (P3) | **85.1%** | — |
+| Paired A/B under window pressure (82 turns, live) | **84.1%, ahead once the window drops facts (87.5% vs 82.1% late-turn)** | 84.1% while its window still holds everything |
 | Context utilization (p50) | **74.5%** | ~40% (fluff) |
 | Added latency per turn | **~18 ms** | 0 (but loses the facts) |
 | Stability (500-turn run) | **0 OOM**, peak RSS 34.7 MB | — |
 
 All numbers are the live runs recorded in the white paper's measured-outcome
-table (§8); PES is defined in §6.
+table (§8); PES is defined in §6. The paired A/B row is the fair-selection
+live measurement (bonsai-27b, identical replayed history for both arms,
+FIFO window capped at 1500 tokens to force truncation): at parity overall,
+with strict hive-only wins outnumbering FIFO-only 14:6 once the naive
+window starts dropping facts.
 
 ## Why HiveBench
 

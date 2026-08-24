@@ -159,7 +159,7 @@ Two honest caveats. (1) **Attribution:** Threat 7 already concedes the hive's fl
 
 ## 3. Architectural Overview
 
-Hive Memory is organized into five functional layers. (Full implementation spec in the companion document, `HIVE-HANDOFF.md` §4–§5.)
+Hive Memory is organized into five functional layers. (The implementation itself is the specification: `hive/` in this repository, with the layer map below and the module tree in the repo.)
 
 | Layer | Function | Core mechanisms |
 |---|---|---|
