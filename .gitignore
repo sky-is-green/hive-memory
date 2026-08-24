@@ -101,6 +101,11 @@ runs/
 # Harness sidecar conversation state
 harness_state/
 
+# Studio runtime artifacts (demo transcripts, session store, tool home)
+transcripts/
+.sessions/
+.dsh-home/
+
 # Local runtime config (secrets / machine-specific)
 *.local.json
 config.local.*
