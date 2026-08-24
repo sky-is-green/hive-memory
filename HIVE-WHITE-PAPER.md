@@ -476,7 +476,7 @@ no GPU code), so the measurements transfer across GPU vendors.
 - Primary (measured): `prism-ml/bonsai-27b` — the only loaded model that honored
   `enable_thinking=false` in the speed probe; the qwen MoE family was probed but burns
   its output budget on reasoning (empty visible replies) and was unusable live.
-- Ultra-small drone: `sentence-transformers/paraphrase-MiniLM-L3-v2` (default since
+- Ultra-small drone: `sentence-transformers/paraphrase-MiniLM-L3-v2` [18] (default since                         
   2026-08-23; ≈60 MB — footprint swap, same retrieval curve; `all-MiniLM-L6-v2` remains
   supported).
 - Medium drone: domain-optimized encoder (e.g., `microsoft/codebert-base` for code;
@@ -632,3 +632,4 @@ The architecture in this paper ships as a working system — not just results. H
 15. Lloyd, S. (1982). Least Squares Quantization in PCM. *IEEE Transactions on Information Theory*, 28(2). https://ieeexplore.ieee.org/document/1056489
 16. Bhargava, Y., et al. (2021). Well-Read Students Learn Better: On the Importance of Pre-training Compact Models. *arXiv:2108.08960*. https://arxiv.org/abs/2108.08960
 17. Gerganov, G., et al. llama.cpp — LLM inference in C/C++ with automatic prefix caching and Vulkan backend. https://github.com/ggml-org/llama.cpp
+18. Wang, W., Wei, F., Dong, L., Bao, H., Yang, N., & Zhou, M. (2020). MiniLM: Deep Self-Attention Distillation for Task-Agnostic Compression of Pre-Trained Transformers. *NeurIPS*. https://arxiv.org/abs/2002.10957 — model card for the default ultra-small drone: https://huggingface.co/sentence-transformers/paraphrase-MiniLM-L3-v2

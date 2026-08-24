@@ -302,7 +302,17 @@ def _setup(providers_file: Path) -> int:
               f"{'reachable' if ok else 'not running'}")
         found_backend = found_backend or ok
 
-    # 3. local llama-server binary (managed mode)
+    # 3. drone model pre-fetch (the default ultra-small downloads ~60 MB from
+    # Hugging Face on first use — do it now so the first turn is instant)
+    try:
+        from sieve.ultra_small import UltraSmallDrone
+
+        UltraSmallDrone(confidence_mode="off")._ensure_loaded()
+        print("  [ok] default drone ready (paraphrase-MiniLM-L3-v2, cached)")
+    except Exception as exc:  # noqa: BLE001 - offline machines can still run --mock
+        print(f"  [..] drone download skipped ({str(exc)[:80]})")
+
+    # 4. local llama-server binary (managed mode)
     llama_bin = Path("tools/llama.cpp/llama-server.exe")
     if llama_bin.exists():
         print(f"  [ok] local llama-server found ({llama_bin}); "
@@ -310,7 +320,7 @@ def _setup(providers_file: Path) -> int:
     else:
         print("  [..] no local llama-server (auto-start needs models/gguf)")
 
-    # 4. next step
+    # 5. next step
     print("-" * 46)
     if found_backend:
         print("Ready. Start the studio with:")

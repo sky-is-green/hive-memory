@@ -9,10 +9,10 @@ sidecar (`harness/`). ~5 minutes to a verified install.
 - **Python 3.10â€“3.14** (`python --version`; 3.14 verified on Windows)
 - **git**
 - A local LLM backend, **one of**:
-  - **LM Studio** (recommended) â€” OpenAI-compatible server on `localhost:1234`
-  - a **GGUF library** in `models/gguf/` â€” the studio auto-starts `llama-server`
+  - **LM Studio** (recommended) - OpenAI-compatible server on `localhost:1234`
+  - a **GGUF library** in `models/gguf/` - the studio auto-starts `llama-server`
     from `tools/llama.cpp/` (Vulkan; works on AMD, no NVIDIA required)
-- Optional: GPU (not required â€” the drones run on CPU)
+- Optional: GPU (not required - the drones run on CPU)
 
 ## 2. Get the repo
 
@@ -48,7 +48,7 @@ What you get:
 
 ## 4. Generate the fixture corpora
 
-The synthetic corpora are **generated, not committed** â€” a fresh clone has none.
+The synthetic corpora are **generated, not committed** - a fresh clone has none.
 The benchmark and live runs need them:
 
 ```powershell
@@ -65,27 +65,29 @@ clean corpus.
 .\.venv\Scripts\python -m tests.run_hive_tests --group maximum
 ```
 
-Expect hundreds of tests passing in under a minute â€” **no LLM, no GPU, no API
+Expect hundreds of tests passing in under a minute - **no LLM, no GPU, no API
 keys** (the suite is fully offline; `--mock` mode covers CI).
 
 ## 6. Start the studio
 
 ```powershell
-.\.venv\Scripts\python -m harness --setup   # creates config, probes backend
+.\.venv\Scripts\python -m harness --setup   # creates config, probes backend, warms the drone
 .\.venv\Scripts\python -m harness           # open http://127.0.0.1:8765
 ```
 
-`--setup` copies `providers.example.json` â†’ `providers.local.json`, checks for a
-reachable backend, and prints the next command. The studio serves an
-OpenAI-compatible endpoint (`http://127.0.0.1:8765/v1/chat/completions`) that
-curates every conversation through the hive â€” this is the integration point for
-other harnesses (see `docs/INTEGRATE.md`).
+`--setup` copies `providers.example.json` → `providers.local.json`, checks for a
+reachable backend, **pre-downloads the default drone** (`paraphrase-MiniLM-L3-v2`,
+~60 MB from Hugging Face — automatic on first live use either way), and prints
+the next command. The studio serves an OpenAI-compatible endpoint
+(`http://127.0.0.1:8765/v1/chat/completions`) that curates every conversation
+through the hive — this is the integration point for other harnesses (see
+`docs/INTEGRATE.md`).
 
-## 7. Agent mode (optional â€” the dsh harness brain)
+## 7. Agent mode (optional - the dsh harness brain)
 
 The console's **Agent (dsh)** chat mode runs the full DeepSeek Harness agent
 loop (bash/files/code tools, multi-step turns) against the model loaded in
-the studio. It needs the pinned dsh fork plus its Python SDK â€” one command
+the studio. It needs the pinned dsh fork plus its Python SDK - one command
 sets all of it up:
 
 ```powershell
@@ -97,7 +99,7 @@ This installs corepack/pnpm, builds the fork, stages the SDK's node runtime
 carrier, and editable-installs `deepseek-harness-sdk` + runtime. The sidecar
 then spawns the agent runtime on demand (first agent message takes ~10 s to
 boot it). Requirements: Node 22+/24. Tool calls need a tool-capable loaded
-model (Gemma 4 26B-A4B and Qwen3-class work; Gemma 3 does not â€” no native
+model (Gemma 4 26B-A4B and Qwen3-class work; Gemma 3 does not - no native
 tool template).
 
 Without this step everything else (chat, hive curation, benchmarks, model
@@ -122,14 +124,14 @@ full run matrix.
 |---|---|
 | `LM Studio not reachable` | Start LM Studio with a model loaded, or pass `--mock` for offline runs |
 | "No conversation files found" | Run step 4 (fixtures are generated, not committed) |
-| Empty replies under `--max-tokens` | The model is a reasoning model burning output on hidden CoT. Pass `--no-thinking` (bonsai-27b honors it; most qwen/gemma variants ignore the flag â€” use the GUI thinking toggle there) |
+| Empty replies under `--max-tokens` | The model is a reasoning model burning output on hidden CoT. Pass `--no-thinking` (bonsai-27b honors it; most qwen/gemma variants ignore the flag - use the GUI thinking toggle there) |
 | `ImportError ... pyarrow ... Application Control policy` | Windows AppControl blocks pyarrow's parquet DLL; the drone auto-stubs it (inference never touches parquet). Nothing to do |
 | Long runs get interrupted | Every live tool checkpoints; resume with `--resume <ckpt>` or use `tools/resume_evidence.ps1`, which relaunches until the report completes |
-| AMD / no NVIDIA | vLLM is dormant; LM Studio / llama.cpp (Vulkan) is the live backend â€” no CUDA anywhere |
+| AMD / no NVIDIA | vLLM is dormant; LM Studio / llama.cpp (Vulkan) is the live backend - no CUDA anywhere |
 
 ## 10. Where to go next
 
-- `docs/INTEGRATE.md` â€” wire hive-memory into OpenCode, dsh, or your own harness
-- `README.md` â€” why Hive, why HiveBench, measured results
-- `HIVE-HANDOFF.md` â€” the master document: state, roadmap, commands
-- `HARNESS-SPEC.md` â€” the studio sidecar contract
+- `docs/INTEGRATE.md` - wire hive-memory into OpenCode, dsh, or your own harness
+- `README.md` - why Hive, why HiveBench, measured results
+- `HIVE-HANDOFF.md` - the master document: state, roadmap, commands
+- `HARNESS-SPEC.md` - the studio sidecar contract
