@@ -175,6 +175,8 @@ full run matrix and the overnight evidence protocol.
 
 ## Documentation
 
+- **`docs/INSTALL.md`** — full-stack install guide (system + benchmark + studio, fresh machine)
+- **`docs/INTEGRATE.md`** — using hive-memory inside OpenCode, dsh, or your own harness
 - **`HIVE-HANDOFF.md`** — master document: state, roadmap (S0–S6), lessons, measured results, next steps
 - **`HIVE-WHITE-PAPER.md`** — the theory, falsifiable predictions P1–P12, threats, evaluation scope
 - **`HIVE-DIAGRAMS.md`** — visuals and measured charts

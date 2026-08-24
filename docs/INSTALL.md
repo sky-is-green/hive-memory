@@ -1,0 +1,113 @@
+# Installing HiveBench (system + benchmark + studio)
+
+Fresh-machine install of the full stack: the **hive-memory** system (`hive/`),
+the **HiveBench** evaluation suite (`hivebench/`), and the **HiveBench Studio**
+sidecar (`harness/`). ~5 minutes to a verified install.
+
+## 1. Prerequisites
+
+- **Python 3.10–3.14** (`python --version`; 3.14 verified on Windows)
+- **git**
+- A local LLM backend, **one of**:
+  - **LM Studio** (recommended) — OpenAI-compatible server on `localhost:1234`
+  - a **GGUF library** in `models/gguf/` — the studio auto-starts `llama-server`
+    from `tools/llama.cpp/` (Vulkan; works on AMD, no NVIDIA required)
+- Optional: GPU (not required — the drones run on CPU)
+
+## 2. Get the repo
+
+```powershell
+git clone https://github.com/sky-is-green/hive-memory.git
+cd hive-memory
+```
+
+## 3. Create the venv and install
+
+```powershell
+# Windows (PowerShell)
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -e ".[harness,bench]"
+```
+
+```bash
+# Linux / macOS
+python3 -m venv .venv
+.venv/bin/python -m pip install -e ".[harness,bench]"
+```
+
+What you get:
+
+| Extra | Provides |
+|---|---|
+| (base) | the system: drones, cortex, retention, backends |
+| `[harness]` | HiveBench Studio (FastAPI sidecar) |
+| `[bench]` | the evaluation suite (pytest, ST trainer) |
+
+> Prefer the pinned manifest? `pip install -r requirements.txt
+> -r requirements-dev.txt` then `pip install -e .` installs the same stack.
+
+## 4. Generate the fixture corpora
+
+The synthetic corpora are **generated, not committed** — a fresh clone has none.
+The benchmark and live runs need them:
+
+```powershell
+.\.venv\Scripts\python -m tests.fixtures.synthetic_conversations.generate                    # code corpus (50 convs)
+.\.venv\Scripts\python -m tests.fixtures.synthetic_conversations.generate --prose --horizon --p9 --return-corpus
+```
+
+This writes `hivebench/tests/fixtures/generated*/`. Re-run any time you need a
+clean corpus.
+
+## 5. Verify the install
+
+```powershell
+.\.venv\Scripts\python -m tests.run_hive_tests --group maximum
+```
+
+Expect hundreds of tests passing in under a minute — **no LLM, no GPU, no API
+keys** (the suite is fully offline; `--mock` mode covers CI).
+
+## 6. Start the studio
+
+```powershell
+.\.venv\Scripts\python -m harness --setup   # creates config, probes backend
+.\.venv\Scripts\python -m harness           # open http://127.0.0.1:8765
+```
+
+`--setup` copies `providers.example.json` → `providers.local.json`, checks for a
+reachable backend, and prints the next command. The studio serves an
+OpenAI-compatible endpoint (`http://127.0.0.1:8765/v1/chat/completions`) that
+curates every conversation through the hive — this is the integration point for
+other harnesses (see `docs/INTEGRATE.md`).
+
+## 7. Run the live benchmark
+
+```powershell
+# quick iteration run (LM Studio on :1234)
+.\.venv\Scripts\python -m experiments.generate_data --live --no-thinking --confidence off --max-convs 3 --max-turns 10
+
+# paired hive-vs-FIFO answer A/B (the LLM-performance head-to-head)
+.\.venv\Scripts\python -m experiments.paired_ab --live --model prism-ml/bonsai-27b --max-convs 2 --max-turns 45 --confidence off --max-tokens 120 --no-thinking --checkpoint-every 2 --output runs/paired_ab_prose.json --checkpoint runs/paired_ab_prose.ckpt.json
+```
+
+See `HIVE-HANDOFF.md` §9 (live benchmark) and §15 (command cheat sheet) for the
+full run matrix.
+
+## 8. Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `LM Studio not reachable` | Start LM Studio with a model loaded, or pass `--mock` for offline runs |
+| "No conversation files found" | Run step 4 (fixtures are generated, not committed) |
+| Empty replies under `--max-tokens` | The model is a reasoning model burning output on hidden CoT. Pass `--no-thinking` (bonsai-27b honors it; most qwen/gemma variants ignore the flag — use the GUI thinking toggle there) |
+| `ImportError ... pyarrow ... Application Control policy` | Windows AppControl blocks pyarrow's parquet DLL; the drone auto-stubs it (inference never touches parquet). Nothing to do |
+| Long runs get interrupted | Every live tool checkpoints; resume with `--resume <ckpt>` or use `tools/resume_evidence.ps1`, which relaunches until the report completes |
+| AMD / no NVIDIA | vLLM is dormant; LM Studio / llama.cpp (Vulkan) is the live backend — no CUDA anywhere |
+
+## 9. Where to go next
+
+- `docs/INTEGRATE.md` — wire hive-memory into OpenCode, dsh, or your own harness
+- `README.md` — why Hive, why HiveBench, measured results
+- `HIVE-HANDOFF.md` — the master document: state, roadmap, commands
+- `HARNESS-SPEC.md` — the studio sidecar contract
