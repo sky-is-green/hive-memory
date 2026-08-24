@@ -43,7 +43,15 @@ Write-Host "venv ready: $VenvPy"
 
 if (-not $SkipFork) {
     if (-not (Test-Path (Join-Path $ForkPath "package.json"))) {
-        throw "dsh fork not found at $ForkPath - clone deepseek-ai/deepseek-harness there (pin b150a551b8) or pass -ForkPath"
+        Step "cloning the dsh fork into $ForkPath"
+        git clone https://github.com/deepseek-ai/deepseek-harness.git $ForkPath
+        Push-Location $ForkPath
+        git checkout -q -b hive-studio b150a551b8
+        Pop-Location
+        Write-Host "fork cloned and pinned at b150a551b8 (branch hive-studio)"
+    }
+    if (-not (Test-Path (Join-Path $ForkPath "package.json"))) {
+        throw "dsh fork not available at $ForkPath"
     }
 
     # --- 3. fork toolchain ----------------------------------------------------
