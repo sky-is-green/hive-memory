@@ -89,13 +89,24 @@ def run_paired(conversations, backend, ultra, medium, sampling=None,
                queen=None, verbose: bool = False,
                checkpoint_path: str | Path | None = None,
                checkpoint_every: int = 5,
-               resume: dict | None = None) -> dict:
+               resume: dict | None = None,
+               live_store: bool = False) -> dict:
     """Run the paired A/B and return the report dict (metrics + per-turn rows).
 
     Long live runs can be resumed: ``checkpoint_path`` writes a JSON checkpoint
     every ``checkpoint_every`` user turns and at each conversation boundary;
     ``resume`` (a loaded checkpoint dict) skips completed conversations/turns
     and restores the current conversation's store and prior history.
+
+    ``live_store=False`` (default) replays the hive store from the fixture
+    answers, so both arms see the identical history and the comparison
+    isolates *selection*: does curated context beat the naive window? The
+    earlier live-replay mode (``live_store=True``, where the store grew from
+    the hive arm's live replies) was asymmetric — FIFO's context is the
+    canonical fixture history while the hive's store held whatever the model
+    actually said, which under-credits the hive (the paper's ingestion
+    problem). Both modes remain available; the fair selection test is the
+    default.
     """
     from experiments.retrieval_diagnostic import (
         _answer_fact_terms,
@@ -111,7 +122,7 @@ def run_paired(conversations, backend, ultra, medium, sampling=None,
         ckpt_path = Path(checkpoint_path)
         ckpt_path.parent.mkdir(parents=True, exist_ok=True)
         ckpt_path.write_text(json.dumps({
-            "version": 1,
+            "version": 2,
             "conv_index": ci,
             "turn_index": turn_index,
             "prior": prior,
@@ -120,6 +131,7 @@ def run_paired(conversations, backend, ultra, medium, sampling=None,
             "first_mention": first_mention,
             "no_facts": no_facts,
             "done_turns": done_turns,
+            "live_store": live_store,
         }, indent=2, default=str), encoding="utf-8")
         # A killed run should still leave readable partial results: mirror the
         # final report shape (minus fidelity, computed only at the end) beside
@@ -189,7 +201,11 @@ def run_paired(conversations, backend, ultra, medium, sampling=None,
 
                     reply_h = backend.generate(hive_ctx, q, sampling or None) or ""
                     reply_f = backend.generate(fifo_ctx, q, sampling or None) or ""
-                    stored_reply = reply_h
+                    # Fair-selection default: both arms' stores replay the same
+                    # canonical history (fixture answers). live_store=True
+                    # keeps the asymmetric live-replay mode for the full-system
+                    # measurement (ingestion + selection together).
+                    stored_reply = reply_h if live_store else answer
 
                     ctx_h_hit, ctx_h_suff = _answer_fact_scoring(facts, hive_ctx)[0]
                     ctx_f_hit, ctx_f_suff = _answer_fact_scoring(facts, fifo_ctx)[0]
@@ -414,6 +430,15 @@ def main(argv: list[str] | None = None) -> int:
         "--resume", default="",
         help="resume a checkpoint file written by a previous (killed) run",
     )
+    parser.add_argument(
+        "--live-store", action="store_true",
+        help="grow the hive store from the hive arm's live replies instead of "
+             "the fixture answers. Default (fixture replay) is the fair "
+             "selection test — both arms see identical history; this flag "
+             "restores the asymmetric live-replay measurement (ingestion + "
+             "selection together, at the cost of comparing against a store "
+             "that lacks facts the model never stated)",
+    )
     args = parser.parse_args(argv)
 
     if args.provider:
@@ -479,6 +504,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"no checkpoint found at {args.resume}")
             return 3
         resume = json.loads(ckpt_path.read_text(encoding="utf-8"))
+        if not args.live_store and resume.get("live_store"):
+            args.live_store = True
+            print("restored --live-store from checkpoint (store was built in live-replay mode)")
         print(f"resuming from {args.resume}: conv "
               f"{resume.get('conv_index', 0) + 1}, turn {resume.get('turn_index', 0)}, "
               f"{len(resume.get('rows', []))} rows done")
@@ -492,7 +520,7 @@ def main(argv: list[str] | None = None) -> int:
                              Path("logs") / "paired_ab.json").with_suffix(".ckpt.json")
                         ),
                         checkpoint_every=args.checkpoint_every,
-                        resume=resume)
+                        resume=resume, live_store=args.live_store)
 
     if keep_awake is not None:
         keep_awake.close()

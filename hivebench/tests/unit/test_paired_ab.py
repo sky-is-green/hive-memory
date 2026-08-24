@@ -161,6 +161,45 @@ def test_main_mock_writes_report(tmp_path, capsys):
     assert "answer recall" in printed
 
 
+def test_fixture_replay_store_is_symmetric():
+    """The default (fixture-replay) store keeps both arms' histories
+    identical, so the comparison isolates selection. live_store=True starves
+    the hive whenever the model never stated the canonical facts — exactly
+    the asymmetry found in the first prose-horizon evidence run."""
+    convs = [{
+        "conversation_id": "c3",
+        "profile": "code",
+        "turns": [
+            {"role": "user", "content": "Which tokens do I use for auth expiry?"},
+            {"role": "assistant",
+             "content": "Access tokens rotate every fifteen minutes."},
+            {"role": "user", "content": "How often do access tokens rotate?"},
+            {"role": "assistant",
+             "content": "Rotation happens every fifteen minutes without exception."},
+            {"role": "user", "content": "How often do access tokens rotate?"},
+        ],
+    }]
+    ultra, medium = _ultra()
+    fair = run_paired(convs, _ContextAwareBackend(convs), ultra, medium,
+                      fifo_budget=100000)
+    m = fair["metrics"]
+    assert m["turns_compared"] == 2
+    # turn 2: the canonical answer (a2) is not in any prior history -> neither
+    # arm can carry the facts; turn 3: both arms have a2 available
+    assert m["neither_sufficient"] == 1
+    assert m["fifo_only"] == 0
+    assert m["both_sufficient"] == 1
+    assert all(r["ctx_hive_suff"] for r in fair["turns"][1:])
+
+    live = run_paired(convs, _ContextAwareBackend(convs), ultra, medium,
+                      fifo_budget=100000, live_store=True)
+    ml = live["metrics"]
+    # asymmetric mode: the hive store never saw a2 (the model didn't state it),
+    # so on turn 3 only FIFO's context carries the facts
+    assert ml["fifo_only"] == 1
+    assert ml["both_sufficient"] == 0
+
+
 def test_main_missing_corpus(tmp_path):
     from experiments.paired_ab import main
 

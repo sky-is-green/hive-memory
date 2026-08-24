@@ -18,7 +18,9 @@ param(
     [int]$Convs = 2,
     [int]$MaxTurns = 45,
     [int]$MaxTokens = 120,
-    [int]$CheckpointEvery = 2
+    [int]$CheckpointEvery = 2,
+    [int]$FifoBudget = 0,
+    [switch]$LiveStore
 )
 
 if (-not $env:HIVE_EVIDENCE_LOG) {
@@ -55,6 +57,8 @@ while (-not (Is-Final $Output)) {
         "--checkpoint", $Checkpoint
     )
     if (Test-Path $Checkpoint) { $args += @("--resume", $Checkpoint) }
+    if ($FifoBudget -gt 0) { $args += @("--fifo-budget", "$FifoBudget") }
+    if ($LiveStore) { $args += @("--live-store") }
     Write-Host "== attempt ${attempt}: $(Get-Date -Format HH:mm:ss)"
     & $VenvPy @args
     $code = $LASTEXITCODE
