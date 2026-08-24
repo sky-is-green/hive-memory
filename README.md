@@ -17,20 +17,24 @@ The core idea is the white paper's *Separation Postulate*: small bidirectional
 filtering, and routing context — while the primary generative LLM does the
 *generation*.
 
-**The headline measurement** (live hive-vs-baselines run `20260822_211131`,
-308+ turns on the same conversations):
+**The headline measurement** — same 308+ turn conversations, same model,
+hive vs naive FIFO windowing (live run `20260822_211131`):
+
+- **Hive ≥ FIFO on 85.1% of retrievable turns** (P3) — the direct head-to-head
+  against the current standard
+- **90.3% of the facts the model stated made it into context** — deterministic
+  P2 diagnostic, ≥90% target; FIFO truncates and drops facts at its window
+  limit
+- **Flat generation speed across 308+ turns** — 14.5 → 15.5 decode tps
+  (+6.7%), no context-bloat slowdown
+- All at ~3.4 ms assembly + ~15 ms drone scoring overhead per turn
 
 ![Post-run PES: hive 80.0 GREEN vs rolling 12.2 / FIFO 11.6](figures/pes.png)
 
-- **PES 80.0 GREEN vs 12.2 (rolling) / 11.6 (FIFO)** — ~6.6× the
-  pipeline-efficiency score of a naive context window
-- **Flat generation speed across 308+ turns** — 14.5 → 15.5 decode tps
-  (+6.7%), no context-bloat slowdown; FIFO truncates and drops facts at its
-  window limit
-- **90.3% recall** of the facts the model actually stated, under a bounded
-  context (deterministic P2 diagnostic, ≥90% target)
-- **Hive ≥ FIFO on 85.1% of retrievable turns** (P3), at ~3.4 ms assembly +
-  ~15 ms drone scoring overhead per turn
+*PES is the system's own pipeline-efficiency score (retrieval/routing/
+latency/throughput/utilization) — a health signal, not a measure of answer
+quality. The head-to-head evidence above is what the claims rest on.*
+
 - Full offline test suite — no LLM calls needed to verify the pipeline;
   deterministic, replayable evaluation for every claim (P1–P12)
 
