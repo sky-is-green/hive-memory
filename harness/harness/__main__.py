@@ -112,6 +112,34 @@ from harness.app import DEFAULT_PORT, OpenAICompatBackend, create_app
 from harness.models import launch_extra_args, LlamaServerManager
 
 
+def _protect_git_excludes(root: Path, names: list[str]) -> None:
+    """Self-protecting runtime state (pattern borrowed from Faber): add the
+    studio's runtime directories to ``.git/info/exclude`` — a local-only
+    ignore that produces no diff and can never be committed — so state files
+    (which may contain conversation content) can't reach GitHub even if the
+    user forgets their own .gitignore. Idempotent; never fatal."""
+    d = root.resolve()
+    while True:
+        git_dir = d / ".git"
+        if git_dir.is_dir():
+            break
+        if d == d.parent:
+            return  # not a git repository
+        d = d.parent
+    try:
+        info = git_dir / "info"
+        info.mkdir(parents=True, exist_ok=True)
+        excl = info / "exclude"
+        existing = excl.read_text(encoding="utf-8") if excl.exists() else ""
+        missing = [n for n in names if n not in existing]
+        if missing:
+            with excl.open("a", encoding="utf-8") as fh:
+                fh.write("\n# hive-memory studio runtime state (auto-added)\n")
+                fh.write("\n".join(missing) + "\n")
+    except OSError:
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="HiveBench Studio harness sidecar (FastAPI, local-only)",
@@ -166,6 +194,11 @@ def main(argv: list[str] | None = None) -> int:
         help="do not open the browser once the server is up",
     )
     args = parser.parse_args(argv)
+
+    _protect_git_excludes(Path.cwd(), [
+        "harness_state/", "logs/", "runs/", "runs_mock/", "transcripts/",
+        ".sessions/", ".dsh-home/", "providers.local.json",
+    ])
 
     if args.setup:
         return _setup(providers_path(args.providers_file or None))

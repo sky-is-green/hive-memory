@@ -211,6 +211,20 @@ def test_health_reports_zero_conversations(client):
     assert r.json() == {"ok": True, "conversations": 0}
 
 
+def test_git_exclude_protection_is_idempotent(tmp_path):
+    from harness.__main__ import _protect_git_excludes
+
+    repo = tmp_path / "repo"
+    (repo / ".git" / "info").mkdir(parents=True)
+    _protect_git_excludes(repo, ["harness_state/", "providers.local.json"])
+    excl = repo / ".git" / "info" / "exclude"
+    text = excl.read_text(encoding="utf-8")
+    assert "harness_state/" in text and "providers.local.json" in text
+    # idempotent: re-running must not duplicate entries
+    _protect_git_excludes(repo, ["harness_state/", "providers.local.json"])
+    assert text == excl.read_text(encoding="utf-8")
+
+
 def test_turn_returns_curated_reply(client):
     c, _app = client
     r = c.post("/v1/hive/turn", json={
