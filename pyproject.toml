@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hive-memory"
+version = "0.1.0"
+description = "Hive Memory — a managed-decay context-curation layer (hive/) plus the HiveBench evaluation suite (hivebench/)"
+readme = "README.md"
+requires-python = ">=3.10"
+
+[project.scripts]
+hivebench = "experiments.generate_data:main"
+hivebench-protocol = "experiments.run_p1_p10:main"
+hivebench-probe = "experiments.model_probe:main"
+hivebench-diagnostic = "experiments.retrieval_diagnostic:main"
+hivebench-gate-ab = "experiments.confirmation_gate_ab:main"
+hivebench-compare = "experiments.run_compare:main"
+hivebench-harness = "harness.__main__:main"
+
+# Three package roots, flat import names preserved:
+#   hive/      -> cortex, sieve, membrane, retention, focal, backend, queen, logs
+#   hivebench/ -> tests, testing, experiments
+#   harness/   -> the HiveBench Studio sidecar (python -m harness)
+[tool.setuptools.packages.find]
+where = ["hive", "hivebench", "harness"]

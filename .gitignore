@@ -39,7 +39,7 @@ models/
 *.npy
 *.npz
 cache/
-sieve/cache/
+hive/sieve/cache/
 *.h5
 
 # Trained / serialized artifacts
@@ -51,7 +51,7 @@ sieve/cache/
 # Runtime state (context store, decay matrix, hive checkpoints)
 state/
 checkpoints/
-retention/state/
+hive/retention/state/
 *.jsonl
 
 # Databases (ground truth, vault)
@@ -78,20 +78,28 @@ site-packages/
 *.ndjson
 
 # Benchmark & report outputs (generated)
-benchmarks/results/
+hivebench/benchmarks/results/
 reports/
 *.html
-*.png
-*.svg
-*.pdf
 
-# Generated test data (large synthetic conversations)
-tests/fixtures/generated/
+# Rendered paper figures (committed — embedded in the white paper)
+!figures/*.png
+
+# Generated test data (large synthetic conversations; regenerate via
+# python -m tests.fixtures.synthetic_conversations.generate [--prose|--horizon|--p9])
+hivebench/tests/fixtures/generated/
+hivebench/tests/fixtures/generated_prose/
+hivebench/tests/fixtures/generated_horizon/
+hivebench/tests/fixtures/generated_prose_horizon/
+hivebench/tests/fixtures/generated_p9/
+hivebench/tests/fixtures/generated_return/
 data/
 sample_data/
 
 # Generated data-generation runs (reports, logs, ground-truth DBs)
 runs/
+# Harness sidecar conversation state
+harness_state/
 
 # Local runtime config (secrets / machine-specific)
 *.local.json

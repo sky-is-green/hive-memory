@@ -1,0 +1,29 @@
+{
+  "providers": [
+    {
+      "name": "lmstudio",
+      "base_url": "http://localhost:1234",
+      "api_key": "lm-studio",
+      "model": "",
+      "headers": {}
+    },
+    {
+      "name": "deepseek",
+      "base_url": "https://api.deepseek.com",
+      "api_key": "sk-YOUR-KEY-HERE",
+      "model": "deepseek-chat",
+      "headers": {}
+    },
+    {
+      "name": "openrouter",
+      "base_url": "https://openrouter.ai/api",
+      "api_key": "sk-or-YOUR-KEY-HERE",
+      "model": "meta-llama/llama-3.1-8b-instruct",
+      "headers": {
+        "HTTP-Referer": "http://localhost:8765",
+        "X-Title": "HiveBench Studio"
+      }
+    }
+  ],
+  "default": "lmstudio"
+}

@@ -1,2 +1,5 @@
 # Development / test dependencies (installed in the venv alongside requirements.txt)
 pytest>=8.0
+# SentenceTransformers Trainer deps (experiments.contrastive_finetune, B avenue)
+accelerate>=1.1.0
+datasets>=3.0

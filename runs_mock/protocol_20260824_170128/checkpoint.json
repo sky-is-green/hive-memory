@@ -1,0 +1,217 @@
+{
+  "version": 1,
+  "run_id": "8ee773c7",
+  "config": {
+    "decay_multiplier_init": 1.8,
+    "remembrance_threshold": 0.65,
+    "stale_threshold": 20,
+    "dedup_threshold": 0.92,
+    "drift_threshold": 0.6,
+    "routing_threshold": 2,
+    "ultra_model": "sentence-transformers/paraphrase-MiniLM-L3-v2",
+    "medium_model": "microsoft/graphcodebert-base",
+    "enable_medium": false,
+    "vocab_boost": 0.15,
+    "confidence_mode": "mcdropout",
+    "sanitize_context": true,
+    "generation_headroom": 2048,
+    "max_context": 8192,
+    "max_chunks": 1000,
+    "max_tokens": null,
+    "filter_hedge_replies": true,
+    "gate_enabled": false,
+    "gate_accept_threshold": 0.4,
+    "gate_flag_threshold": 0.2,
+    "gate_substantive_floor": 3,
+    "comb_enabled": false,
+    "comb_relevant_only": true,
+    "comb_max_records": 2000,
+    "comb_top_k": 5,
+    "comb_dir": null,
+    "comb_gate_threshold": 0.85,
+    "comb_max_age_turns": 1000,
+    "budget_ranges": {
+      "ultra_small": [
+        1000,
+        3000
+      ],
+      "medium": [
+        3000,
+        5000
+      ],
+      "escalation": [
+        4000,
+        6000
+      ]
+    }
+  },
+  "store": {
+    "max_chunks": 1000,
+    "chunks": [
+      {
+        "id": "cb26b9c69c85",
+        "content": "Set blue-green to the default for the deploy pipeline.",
+        "turn": 1,
+        "fingerprint": "257d9b896b88",
+        "timestamp": "2026-08-24T16:01:28.902930Z",
+        "decay_multiplier": 1.0,
+        "times_saved": 0,
+        "last_referenced_turn": 1,
+        "relevance_history": [
+          [
+            2,
+            0.2
+          ]
+        ]
+      },
+      {
+        "id": "8d612da9bf91",
+        "content": "[mock] re: Set blue-green to the default for the de",
+        "turn": 1,
+        "fingerprint": "7a21fd659a8f",
+        "timestamp": "2026-08-24T16:01:28.902953Z",
+        "decay_multiplier": 1.0,
+        "times_saved": 0,
+        "last_referenced_turn": 1,
+        "relevance_history": []
+      },
+      {
+        "id": "1ba842293d68",
+        "content": "Actually, never mind \u2014 override blue-green to a non-standard value now.",
+        "turn": 2,
+        "fingerprint": "8a286eb6d8f6",
+        "timestamp": "2026-08-24T16:01:28.912519Z",
+        "decay_multiplier": 1.0,
+        "times_saved": 0,
+        "last_referenced_turn": 2,
+        "relevance_history": []
+      },
+      {
+        "id": "d357047caade",
+        "content": "[mock] re: Actually, never mind \u2014 override blue-gre",
+        "turn": 2,
+        "fingerprint": "1cbb3327be62",
+        "timestamp": "2026-08-24T16:01:28.912542Z",
+        "decay_multiplier": 1.0,
+        "times_saved": 0,
+        "last_referenced_turn": 2,
+        "relevance_history": []
+      }
+    ],
+    "turn_index": {
+      "1": [
+        "cb26b9c69c85",
+        "8d612da9bf91"
+      ],
+      "2": [
+        "1ba842293d68",
+        "d357047caade"
+      ]
+    }
+  },
+  "hive_turn": 2,
+  "progress": {
+    "conv_index": 2,
+    "turn_index": 0,
+    "records": [
+      {
+        "conversation_id": "edge_001",
+        "profile": "edge",
+        "turns": [
+          {
+            "turn": 1,
+            "query": "Given the long history of this project, consolidate everything about the order schema. (normalization) 3NF with a denormalized read model; (indexes) composite on (customer_id, created_at); (soft deletes) deleted_at column; (migrations) Alembic, forward-only; (foreign keys) ON DELETE CASCADE;",
+            "reply": "[mock] re: Given the long history of this project, ",
+            "assembled_content": "",
+            "mode": "hive",
+            "pes": 57.14,
+            "degradation_level": 0,
+            "timings": {
+              "remembrance_ms": 0.3,
+              "scoring_ms": 0.194,
+              "dedup_ms": 0.002,
+              "drift_ms": 0.003,
+              "decay_ms": 0.002,
+              "select_ms": 0.001,
+              "assembly_total_ms": 0.525,
+              "generation_ms": 8.291,
+              "total_ms": 8.816
+            },
+            "token_count": 0,
+            "budget": 1000,
+            "completion_tokens": null
+          }
+        ]
+      },
+      {
+        "conversation_id": "edge_002",
+        "profile": "edge",
+        "turns": [
+          {
+            "turn": 1,
+            "query": "Set blue-green to the default for the deploy pipeline.",
+            "reply": "[mock] re: Set blue-green to the default for the de",
+            "assembled_content": "",
+            "mode": "hive",
+            "pes": 57.14,
+            "degradation_level": 0,
+            "timings": {
+              "remembrance_ms": 0.365,
+              "scoring_ms": 0.015,
+              "dedup_ms": 0.003,
+              "drift_ms": 0.004,
+              "decay_ms": 0.003,
+              "select_ms": 0.002,
+              "assembly_total_ms": 0.414,
+              "generation_ms": 8.439,
+              "total_ms": 8.853
+            },
+            "token_count": 0,
+            "budget": 1000,
+            "completion_tokens": null
+          },
+          {
+            "turn": 2,
+            "query": "Actually, never mind \u2014 override blue-green to a non-standard value now.",
+            "reply": "[mock] re: Actually, never mind \u2014 override blue-gre",
+            "assembled_content": "Set blue-green to the default for the deploy pipeline.",
+            "mode": "hive",
+            "pes": 57.7,
+            "degradation_level": 0,
+            "timings": {
+              "remembrance_ms": 0.348,
+              "scoring_ms": 0.024,
+              "dedup_ms": 0.35,
+              "drift_ms": 0.004,
+              "decay_ms": 0.004,
+              "select_ms": 0.004,
+              "assembly_total_ms": 0.759,
+              "generation_ms": 8.617,
+              "total_ms": 9.376
+            },
+            "token_count": 13,
+            "budget": 1000,
+            "completion_tokens": null
+          }
+        ]
+      }
+    ],
+    "current_record": null,
+    "done": 3
+  },
+  "run_args": {
+    "mode": "mock",
+    "conversations": "hivebench/tests/fixtures/generated",
+    "max_convs": 2,
+    "max_turns": null,
+    "base_url": "http://localhost:1234",
+    "model": "",
+    "pinned_prefix": "You are an assistant operating in the Hive Memory system. Answer using the provided context and conversation history whenever they contain the needed information. If the context is insufficient, you may draw on your general knowledge, but clearly mark any such part.",
+    "comb_dir": "",
+    "comb_top_k": 3,
+    "comb_max_records": 2000,
+    "confidence": "mcdropout",
+    "no_thinking": false,
+    "conversation_id": "protocol_20260824_170128"
+  }
+}

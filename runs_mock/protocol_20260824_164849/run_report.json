@@ -1,0 +1,374 @@
+{
+  "run_id": "63c3a9a1",
+  "mode": "mock",
+  "backend": "LMStudioBackend",
+  "run_dir": "C:\\Users\\penis\\Documents\\hive-memory\\runs_mock\\protocol_20260824_164849",
+  "generated_at": "2026-08-24T16:49:26.710298+01:00",
+  "ground_truth_db": "C:\\Users\\penis\\Documents\\hive-memory\\runs_mock\\protocol_20260824_164849\\ground_truth.sqlite",
+  "event_logs": "C:\\Users\\penis\\Documents\\hive-memory\\runs_mock\\protocol_20260824_164849\\logs",
+  "aggregate": {
+    "user_turns": 3,
+    "conversations": 2,
+    "avg_pes": 57.33,
+    "min_pes": 57.14,
+    "avg_total_ms": 8.89,
+    "fifo_fallbacks": 0,
+    "drift_events": 0
+  },
+  "ground_truth": {
+    "queen_labels": 1,
+    "retrieval_precision": 100.0,
+    "retrieval_recall": 100.0,
+    "false_eviction_rate": 0.0,
+    "routing_accuracy": 100.0
+  },
+  "post_run_pes": {
+    "pes": 82.43,
+    "band": "GREEN",
+    "breakdown": {
+      "retrieval_precision": 30.0,
+      "routing_accuracy": 20.0,
+      "latency_health": 20.0,
+      "context_utilization": 0.065
+    },
+    "active_components": [
+      "retrieval_precision",
+      "routing_accuracy",
+      "latency_health",
+      "context_utilization"
+    ],
+    "components": {
+      "retrieval_precision": 100.0,
+      "routing_accuracy": 100.0,
+      "latency_health": 100.0,
+      "throughput_health": null,
+      "context_utilization": 0.4
+    },
+    "measurements": {
+      "turns": 3,
+      "avg_total_ms": 8.9,
+      "avg_context_utilization_pct": 0.4,
+      "actual_tps": null,
+      "baseline_tps": 30.0,
+      "queen_labels": 1
+    },
+    "notes": []
+  },
+  "retrieval_diagnostic": {
+    "sampled_turns": 3,
+    "measurable_turns": 0,
+    "retrievable_turns": 0,
+    "first_mention_turns": 3,
+    "retrieval_recall": null,
+    "retrieval_recall_retrievable": null,
+    "ingestion_rate": 0.0,
+    "perfect_hive_ceiling": 0.0,
+    "retrieval_precision": 100.0,
+    "turns": [
+      {
+        "turn": 1,
+        "conversation_id": "edge_001",
+        "query": "Given the long history of this project, consolidate everything about the order s",
+        "answer_facts": [],
+        "stated_facts": [],
+        "facts_found": [],
+        "hit_ratio": null,
+        "ingestion_ratio": null,
+        "retrievable": false,
+        "first_mention": true,
+        "precision": null
+      },
+      {
+        "turn": 1,
+        "conversation_id": "edge_002",
+        "query": "Set blue-green to the default for the deploy pipeline.",
+        "answer_facts": [],
+        "stated_facts": [],
+        "facts_found": [],
+        "hit_ratio": null,
+        "ingestion_ratio": null,
+        "retrievable": false,
+        "first_mention": true,
+        "precision": null
+      },
+      {
+        "turn": 2,
+        "conversation_id": "edge_002",
+        "query": "Actually, never mind \u2014 override blue-green to a non-standard value now.",
+        "answer_facts": [
+          "deploy",
+          "overriding",
+          "understood"
+        ],
+        "stated_facts": [],
+        "facts_found": [],
+        "hit_ratio": null,
+        "ingestion_ratio": 0.0,
+        "retrievable": false,
+        "first_mention": true,
+        "precision": 1.0
+      }
+    ]
+  },
+  "comb": null,
+  "conversations": [
+    {
+      "conversation_id": "edge_001",
+      "profile": "edge",
+      "turns": [
+        {
+          "turn": 1,
+          "query": "Given the long history of this project, consolidate everything about the order schema. (normalization) 3NF with a denormalized read model; (indexes) composite on (customer_id, created_at); (soft deletes) deleted_at column; (migrations) Alembic, forward-only; (foreign keys) ON DELETE CASCADE;",
+          "reply": "[mock] re: Given the long history of this project, ",
+          "assembled_content": "",
+          "mode": "hive",
+          "pes": 57.14,
+          "degradation_level": 0,
+          "timings": {
+            "remembrance_ms": 0.365,
+            "scoring_ms": 0.199,
+            "dedup_ms": 0.003,
+            "drift_ms": 0.004,
+            "decay_ms": 0.002,
+            "select_ms": 0.002,
+            "assembly_total_ms": 0.597,
+            "generation_ms": 8.19,
+            "total_ms": 8.787
+          },
+          "token_count": 0,
+          "budget": 1000,
+          "completion_tokens": null
+        }
+      ]
+    },
+    {
+      "conversation_id": "edge_002",
+      "profile": "edge",
+      "turns": [
+        {
+          "turn": 1,
+          "query": "Set blue-green to the default for the deploy pipeline.",
+          "reply": "[mock] re: Set blue-green to the default for the de",
+          "assembled_content": "",
+          "mode": "hive",
+          "pes": 57.14,
+          "degradation_level": 0,
+          "timings": {
+            "remembrance_ms": 0.384,
+            "scoring_ms": 0.015,
+            "dedup_ms": 0.002,
+            "drift_ms": 0.004,
+            "decay_ms": 0.002,
+            "select_ms": 0.002,
+            "assembly_total_ms": 0.433,
+            "generation_ms": 8.344,
+            "total_ms": 8.777
+          },
+          "token_count": 0,
+          "budget": 1000,
+          "completion_tokens": null
+        },
+        {
+          "turn": 2,
+          "query": "Actually, never mind \u2014 override blue-green to a non-standard value now.",
+          "reply": "[mock] re: Actually, never mind \u2014 override blue-gre",
+          "assembled_content": "Set blue-green to the default for the deploy pipeline.",
+          "mode": "hive",
+          "pes": 57.7,
+          "degradation_level": 0,
+          "timings": {
+            "remembrance_ms": 0.388,
+            "scoring_ms": 0.026,
+            "dedup_ms": 0.377,
+            "drift_ms": 0.004,
+            "decay_ms": 0.004,
+            "select_ms": 0.003,
+            "assembly_total_ms": 0.829,
+            "generation_ms": 8.263,
+            "total_ms": 9.092
+          },
+          "token_count": 13,
+          "budget": 1000,
+          "completion_tokens": null
+        }
+      ]
+    }
+  ],
+  "protocol": [
+    {
+      "id": "P1",
+      "title": "Constant throughput",
+      "status": "SKIP",
+      "evidence": {},
+      "note": "conversation too short"
+    },
+    {
+      "id": "P2",
+      "title": "Retrieval precision/recall",
+      "status": "FAIL",
+      "evidence": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "tp": 0,
+        "fp": 0,
+        "fn": 46,
+        "pairs": 200
+      },
+      "note": ""
+    },
+    {
+      "id": "P3",
+      "title": "Context sufficiency (hive>=FIFO)",
+      "status": "SKIP",
+      "evidence": {},
+      "note": "no retrievable turns with fixture ground-truth answers"
+    },
+    {
+      "id": "P4",
+      "title": "Domain-dependent decay curve",
+      "status": "REPORT",
+      "evidence": {
+        "code": {
+          "best_multiplier": 1.2,
+          "best_recall": 0.6,
+          "recall_by_multiplier": {
+            "1.2": 0.6,
+            "1.4": 0.6,
+            "1.6": 0.6,
+            "1.8": 0.6,
+            "2.0": 0.6,
+            "2.2": 0.6,
+            "2.5": 0.6
+          },
+          "m90": 2.5,
+          "flat_across_multipliers": true
+        },
+        "prose": {
+          "best_multiplier": 1.2,
+          "best_recall": 0.0,
+          "recall_by_multiplier": {
+            "1.2": 0.0,
+            "1.4": 0.0,
+            "1.6": 0.0,
+            "1.8": 0.0,
+            "2.0": 0.0,
+            "2.2": 0.0,
+            "2.5": 0.0
+          },
+          "m90": 2.5,
+          "flat_across_multipliers": true
+        },
+        "m90_gap": 0.0,
+        "code_vs_prose_differ": false
+      },
+      "note": "long-horizon replay sweep (fixed 1000-token budget, fact-level retrievability): code m90 2.5 @ 0.6% max, prose m90 2.5 @ 0.0% max, gap 0.0 \u2014 REPORT: flat or missing corpus \u2014 decay does not govern retrieval here"
+    },
+    {
+      "id": "P5",
+      "title": "Targeted-masking beats random masking",
+      "status": "SKIP",
+      "evidence": {},
+      "note": "run experiments.p5_targeted_masking (training experiment)"
+    },
+    {
+      "id": "P6",
+      "title": "Confidence escalation recall",
+      "status": "FAIL",
+      "evidence": {
+        "small_only_recall": 0.0,
+        "escalated_recall": 0.0,
+        "improvement": 0.0,
+        "escalation_rate": 0.0
+      },
+      "note": ""
+    },
+    {
+      "id": "P7",
+      "title": "Queen-human label agreement >=90%",
+      "status": "SKIP",
+      "evidence": {},
+      "note": "measured live via experiments.human_label (single human rater protocol, 500 items): 90.25% agreement on the 400 valid items (2026-08-23); rerun with a fresh rater to re-measure"
+    },
+    {
+      "id": "P8",
+      "title": "Routing accuracy",
+      "status": "PASS",
+      "evidence": {
+        "accuracy": 1.0,
+        "correct": 200,
+        "total": 200
+      },
+      "note": "optimal labels are heuristic-proxy; real queen labels would be stricter"
+    },
+    {
+      "id": "P9",
+      "title": "Densest-duplicate retention",
+      "status": "FAIL",
+      "evidence": {
+        "informative_turns": 12,
+        "control_turns": 12,
+        "merges": 2312,
+        "densest_wins": 0,
+        "recency_wins": 0,
+        "ties": 12,
+        "densest_share": 0.0,
+        "recency_share": 0.0,
+        "densest_hits": 0,
+        "recency_hits": 0,
+        "densest_fact_tokens": 0,
+        "recency_fact_tokens": 0,
+        "densest_per_1k": null,
+        "recency_per_1k": null,
+        "control_densest_per_1k": null,
+        "control_recency_per_1k": null
+      },
+      "note": "no measurable difference (<=5 points)"
+    },
+    {
+      "id": "P10",
+      "title": "Drift reset accelerates recovery within 3 turns",
+      "status": "FAIL",
+      "evidence": {
+        "reset_on_recall": 7.1,
+        "reset_off_recall": 7.1,
+        "improvement_pts": 0.0,
+        "window": "3 turns after topic switch"
+      },
+      "note": "deterministic fact-presence within 3 turns of a fixture topic switch; drift detector forced ON (threshold 0.1, fires 571/628) vs OFF (0.99, fires 0). Measured: reset has ~no effect on recent-fact survival \u2014 drift penalties multiply old chunks' decayed scores, but the relevant facts are recent and already win selection."
+    },
+    {
+      "id": "P11",
+      "title": "Comb resurrection (topic-return recall)",
+      "status": "FAIL",
+      "evidence": {
+        "full_replay": {
+          "comb_off_return_recall": 0.0,
+          "comb_on_return_recall": 0.0,
+          "comb_off_non_return_recall": 0.0,
+          "comb_on_non_return_recall": 0.0,
+          "n_return": 30,
+          "archived": 1,
+          "resurrected": 7
+        },
+        "pressure_replay": {
+          "comb_off_return_recall": 0.0,
+          "comb_on_return_recall": 0.0,
+          "comb_on_retrievable_recall": 0.0,
+          "n_return": 30,
+          "n_retrievable": 6,
+          "archived": 0,
+          "resurrected": 66
+        },
+        "keep_last_n_recall": 20.0,
+        "clauses": {
+          "mechanism_ge_90_pct_retrievable": false,
+          "no_archiving_regression": true,
+          "no_crowding": true,
+          "beats_keep_last_n": false
+        }
+      },
+      "note": "deterministic replay of the return corpus (real drone drone); pressure regime max_chunks=8, fixed 1000-token budget. pressure comb recall 0.0% vs no-comb 0.0% (retrievable 0.0%); full replay 0.0% vs 0.0%."
+    }
+  ],
+  "baselines": null
+}
