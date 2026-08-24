@@ -1,0 +1,392 @@
+"""Paired live A/B: hive-curated context vs the naive FIFO window on the same
+turns — the "improvement over the current standard on LLM performance"
+measurement the paper's PES cannot make alone.
+
+For every retrievable turn with a fixture ground-truth answer, the same model
+generates two replies:
+
+  - arm H: context assembled by the hive (the store replays the live pipeline:
+    query chunk + non-hedge reply chunk per turn)
+  - arm F: the last-``fifo_budget``-token window of the same history
+
+Each reply is then scored *deterministically* on answer-fact presence — did the
+answer contain the fixture ground-truth facts (``_answer_fact_terms``)? Optionally
+(``--queen``) each arm is also scored for context sufficiency by the LLM queen.
+
+Metrics (over retrievable turns with measurable facts):
+
+  - ``hive_answer_recall`` / ``fifo_answer_recall`` — share of turns whose
+    *answer* contained the ground-truth facts (binary at hit-ratio >= 0.5,
+    matching the retrieval diagnostic's convention)
+  - ``hive_ge_fifo_ratio`` — turns where the hive answer carried the facts while
+    the FIFO answer did not (strict win) OR both did; the answer-level analogue
+    of P3's context-level A/B
+  - ``strict_hive_only_ratio`` — strict wins only
+  - context-level sufficiency columns (P3-style) are recorded for comparison
+
+Usage::
+
+    python -m experiments.paired_ab --mock        # offline harness verification
+    python -m experiments.paired_ab --live --max-convs 10 --max-turns 20
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+from backend.cache_manager import KVCacheManager
+from backend.lmstudio import LMStudioBackend
+from backend.sampling import parse_sampling
+from cortex.baselines.runner import FIFO_WINDOW_TOKENS, load_conversations
+from cortex.baselines.metrics import estimate_tokens
+from cortex.e2e import FakeUltraSmall, MockTransport
+from cortex.hive import Hive
+from cortex.routing import DroneRouter, EscalationHandler
+from focal.assembly import ContextAssembler
+from focal.budget import AdaptiveBudget
+from membrane.dedup import ContextDeduplicator
+from membrane.drift import TopicDriftDetector
+from queen.queen import Queen, TurnRecord
+from retention.store import ContextStore
+from sieve.medium import MediumDrone
+from sieve.ultra_small import UltraSmallDrone
+
+
+def _fifo_context(history: list[dict], budget_tokens: int = FIFO_WINDOW_TOKENS) -> str:
+    """Naive FIFO truncation: keep the most recent messages that fit the window
+    (the current user turn is newest, so always retained). Mirrors
+    ``cortex.baselines.runner.build_fifo_messages``."""
+    total = 0
+    kept: list[dict] = []
+    for msg in reversed(history):
+        cost = estimate_tokens(msg.get("content", ""))
+        if kept and total + cost > budget_tokens:
+            continue
+        kept.append(msg)
+        total += cost
+    return "\n\n".join(m.get("content", "") for m in reversed(kept))
+
+
+def _answer_fact_scoring(facts, *texts):
+    """(hit_ratio, suff) for each text: share of facts present, and binary
+    presence. Mirrors the retrieval diagnostic's hit convention."""
+    out = []
+    for text in texts:
+        from experiments.retrieval_diagnostic import _content_terms
+
+        terms = _content_terms(text or "")
+        present = facts & terms if facts else set()
+        hit = len(present) / len(facts) if facts else 0.0
+        out.append((hit, bool(facts) and present == facts))
+    return out
+
+
+def run_paired(conversations, backend, ultra, medium, sampling=None,
+               max_turns=None, fifo_budget: int = FIFO_WINDOW_TOKENS,
+               queen=None) -> dict:
+    """Run the paired A/B and return the report dict (metrics + per-turn rows)."""
+    from experiments.retrieval_diagnostic import (
+        _answer_fact_terms,
+        _fixture_answer_map,
+        _is_retrievable,
+    )
+
+    ans = _fixture_answer_map(conversations)
+
+    assembler = ContextAssembler()
+    rows: list[dict] = []
+    first_mention = 0
+    no_facts = 0
+
+    for conv in conversations:
+        cid = conv.get("conversation_id", "unknown")
+        conv_answers = ans.get(cid, {})
+        store = ContextStore(embed_fn=ultra.embed)
+        turn = 0
+        prior_parts: list[str] = []
+        for td in conv.get("turns", []):
+            if td.get("role") == "user":
+                turn += 1
+                if max_turns and turn > max_turns:
+                    break
+                q = td["content"]
+                answer = conv_answers.get(q, "")
+                facts = _answer_fact_terms(q, answer) if answer else set()
+                stored_reply = ""
+                if not facts:
+                    no_facts += 1
+                elif not _is_retrievable(q, " ".join(prior_parts)):
+                    first_mention += 1
+                    # Skipped turns still grow the store like the live pipeline;
+                    # the fixture answer stands in for the reply (P3's replay
+                    # convention — no LLM call is spent on unscorable turns).
+                    stored_reply = answer
+                else:
+                    hive_ctx = assembler.assemble(
+                        query=q, current_turn=turn, store=store,
+                        router=DroneRouter(), ultra_small=ultra, medium=medium,
+                        escalation=EscalationHandler(), dedup=ContextDeduplicator(),
+                        drift_detector=TopicDriftDetector(embed_fn=ultra.embed),
+                        budget=AdaptiveBudget(), max_context=8192,
+                    ).content
+                    history = [{"role": t["role"], "content": t["content"]}
+                               for t in conv["turns"][: 2 * turn - 1]]
+                    fifo_ctx = _fifo_context(history, fifo_budget)
+
+                    reply_h = backend.generate(hive_ctx, q, sampling or None) or ""
+                    reply_f = backend.generate(fifo_ctx, q, sampling or None) or ""
+                    stored_reply = reply_h
+
+                    ctx_h_hit, ctx_h_suff = _answer_fact_scoring(facts, hive_ctx)[0]
+                    ctx_f_hit, ctx_f_suff = _answer_fact_scoring(facts, fifo_ctx)[0]
+                    ans_h_hit, ans_h_suff = _answer_fact_scoring(facts, reply_h)[0]
+                    ans_f_hit, ans_f_suff = _answer_fact_scoring(facts, reply_f)[0]
+
+                    row = {
+                        "turn": turn,
+                        "conversation_id": cid,
+                        "query": q,
+                        "hive_ctx_tokens": estimate_tokens(hive_ctx),
+                        "fifo_ctx_tokens": estimate_tokens(fifo_ctx),
+                        "ctx_hive_suff": ctx_h_suff,
+                        "ctx_fifo_suff": ctx_f_suff,
+                        "answer_hive_hit_ratio": round(ans_h_hit, 3),
+                        "answer_fifo_hit_ratio": round(ans_f_hit, 3),
+                        "answer_hive_suff": ans_h_suff,
+                        "answer_fifo_suff": ans_f_suff,
+                        "reply_hive": reply_h[:500],
+                        "reply_fifo": reply_f[:500],
+                    }
+                    if queen is not None:
+                        row["queen"] = {}
+                        for arm, ctx, reply in (("hive", hive_ctx, reply_h),
+                                                ("fifo", fifo_ctx, reply_f)):
+                            try:
+                                label = queen.evaluate_turn(TurnRecord(
+                                    turn=turn, assembled_context=ctx, user_query=q,
+                                    llm_response=reply, chunk_ids=[],
+                                ))
+                                row["queen"][arm] = {
+                                    "sufficient": label.context_sufficient,
+                                    "score": label.sufficiency_score,
+                                }
+                            except Exception as exc:  # noqa: BLE001
+                                row["queen"][arm] = {"error": str(exc)[:200]}
+                    rows.append(row)
+
+                # Grow the hive store like the live pipeline on every user turn:
+                # query chunk always, the reply chunk (hive arm's live reply, or
+                # the fixture answer for skipped turns) unless it is a hedge.
+                store.add_chunk(turn, q)
+                if stored_reply and not Hive._is_hedge_reply(stored_reply):
+                    store.add_chunk(turn, stored_reply)
+                prior_parts.append(td.get("content", "") or "")
+            else:
+                prior_parts.append(td.get("content", "") or "")
+
+    n = len(rows)
+    if n == 0:
+        return {
+            "turns_compared": 0,
+            "first_mention_excluded": first_mention,
+            "no_facts_excluded": no_facts,
+            "metrics": {},
+            "turns": [],
+        }
+
+    hive_only = fifo_only = both = neither = 0
+    ctx_hive_only = ctx_fifo_only = ctx_both = ctx_neither = 0
+    for r in rows:
+        if r["answer_hive_suff"] and not r["answer_fifo_suff"]:
+            hive_only += 1
+        elif r["answer_fifo_suff"] and not r["answer_hive_suff"]:
+            fifo_only += 1
+        elif r["answer_hive_suff"] and r["answer_fifo_suff"]:
+            both += 1
+        else:
+            neither += 1
+        if r["ctx_hive_suff"] and not r["ctx_fifo_suff"]:
+            ctx_hive_only += 1
+        elif r["ctx_fifo_suff"] and not r["ctx_hive_suff"]:
+            ctx_fifo_only += 1
+        elif r["ctx_hive_suff"] and r["ctx_fifo_suff"]:
+            ctx_both += 1
+        else:
+            ctx_neither += 1
+
+    fact_retrievable = hive_only + fifo_only + both
+    ctx_fact_retrievable = ctx_hive_only + ctx_fifo_only + ctx_both
+    ans_recall_h = sum(1 for r in rows if r["answer_hive_hit_ratio"] >= 0.5) / n
+    ans_recall_f = sum(1 for r in rows if r["answer_fifo_hit_ratio"] >= 0.5) / n
+    avg_hit_h = sum(r["answer_hive_hit_ratio"] for r in rows) / n
+    avg_hit_f = sum(r["answer_fifo_hit_ratio"] for r in rows) / n
+
+    metrics = {
+        "turns_compared": n,
+        "first_mention_excluded": first_mention,
+        "no_facts_excluded": no_facts,
+        "hive_answer_recall": round(ans_recall_h * 100.0, 1),
+        "fifo_answer_recall": round(ans_recall_f * 100.0, 1),
+        "hive_avg_fact_hit_ratio": round(avg_hit_h, 3),
+        "fifo_avg_fact_hit_ratio": round(avg_hit_f, 3),
+        "hive_only": hive_only,
+        "fifo_only": fifo_only,
+        "both_sufficient": both,
+        "neither_sufficient": neither,
+        "hive_ge_fifo_ratio": round(
+            (hive_only + both) / fact_retrievable * 100.0, 1) if fact_retrievable else 0.0,
+        "strict_hive_only_ratio": round(
+            hive_only / fact_retrievable * 100.0, 1) if fact_retrievable else 0.0,
+        "ctx_hive_only": ctx_hive_only,
+        "ctx_fifo_only": ctx_fifo_only,
+        "ctx_both_sufficient": ctx_both,
+        "ctx_neither_sufficient": ctx_neither,
+        "ctx_hive_ge_fifo_ratio": round(
+            (ctx_hive_only + ctx_both) / ctx_fact_retrievable * 100.0, 1)
+            if ctx_fact_retrievable else 0.0,
+        "fifo_budget_tokens": fifo_budget,
+    }
+    if queen is not None:
+        qh = [r["queen"]["hive"] for r in rows if "hive" in r.get("queen", {})
+              and "sufficient" in r["queen"]["hive"]]
+        qf = [r["queen"]["fifo"] for r in rows if "fifo" in r.get("queen", {})
+              and "sufficient" in r["queen"]["fifo"]]
+        metrics["queen_hive_sufficient_rate"] = round(
+            sum(1 for x in qh if x["sufficient"]) / len(qh) * 100.0, 1) if qh else None
+        metrics["queen_fifo_sufficient_rate"] = round(
+            sum(1 for x in qf if x["sufficient"]) / len(qf) * 100.0, 1) if qf else None
+
+    return {"metrics": metrics, "turns": rows}
+
+
+def _live_queen(backend):
+    def fn(prompt: str) -> str:
+        backend.pinned_prefix = ""
+        return backend.generate(
+            "You are an evaluation engine. Respond with ONLY a valid JSON object.",
+            prompt, {"temperature": 0.0, "max_tokens": 2048},
+        )
+    return fn
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Paired live A/B: hive context vs FIFO window on the same turns")
+    parser.add_argument("--mock", action="store_true")
+    parser.add_argument("--live", action="store_true")
+    parser.add_argument("--conversations", default="hivebench/tests/fixtures/generated")
+    parser.add_argument("--max-convs", type=int, default=None)
+    parser.add_argument("--max-turns", type=int, default=None)
+    parser.add_argument("--base-url", default="http://localhost:1234")
+    parser.add_argument("--model", default="")
+    parser.add_argument("--provider", default="",
+                        help="provider name from the providers config: fills "
+                             "base_url/api_key/model (explicit flags win)")
+    parser.add_argument("--providers-file", default="",
+                        help="path to the providers JSON config")
+    parser.add_argument("--output", default="")
+    parser.add_argument(
+        "--sampling", default="",
+        help="sampling overrides as JSON, e.g. --sampling "
+             "'{\"temperature\":0.7}' (backend.sampling fields)",
+    )
+    parser.add_argument(
+        "--queen", action="store_true",
+        help="also score each arm's context sufficiency with the LLM queen "
+             "(doubles label-phase LLM cost; mock mode uses the mock queen)",
+    )
+    parser.add_argument(
+        "--fifo-budget", type=int, default=FIFO_WINDOW_TOKENS,
+        help="FIFO window size in tokens (default %(default)s)",
+    )
+    args = parser.parse_args(argv)
+
+    if args.provider:
+        from backend.providers import apply_provider_overrides, backend_kwargs, load_registry
+
+        try:
+            prov = load_registry(args.providers_file or None).resolve(args.provider)
+        except LookupError as exc:
+            print(f"error: {exc}")
+            return 2
+        apply_provider_overrides(vars(parser.parse_args([])), args, prov)
+        pkw = backend_kwargs(prov)
+    else:
+        pkw = {}
+
+    conversations = load_conversations(args.conversations)
+    if args.max_convs:
+        conversations = conversations[: args.max_convs]
+    if not conversations:
+        print(f"No conversation files found in {args.conversations}")
+        return 2
+
+    if args.mock or not args.live:
+        ultra = FakeUltraSmall()
+        backend = LMStudioBackend(base_url=args.base_url, model=args.model,
+                                  api_key=pkw.get("api_key", "lm-studio"),
+                                  extra_headers=pkw.get("extra_headers"),
+                                  transport=MockTransport())
+        live = False
+    else:
+        ultra = UltraSmallDrone()
+        ultra._ensure_loaded()
+        backend = LMStudioBackend(base_url=args.base_url, model=args.model,
+                                  api_key=pkw.get("api_key", "lm-studio"),
+                                  extra_headers=pkw.get("extra_headers"))
+        if not backend.health():
+            print(f"LM Studio not reachable at {args.base_url}")
+            return 3
+        live = True
+
+    medium = MediumDrone(score_pair_fn=lambda q, c: 0.5)
+    queen = None
+    if args.queen:
+        queen = Queen(generate_fn=_live_queen(backend) if live else
+                      (lambda p: json.dumps(
+                          {"sufficient": True, "used_pieces": [], "missing": [],
+                           "score": 4})))
+    sampling = parse_sampling(args.sampling) if args.sampling else None
+
+    report = run_paired(conversations, backend, ultra, medium, sampling=sampling,
+                        max_turns=args.max_turns, fifo_budget=args.fifo_budget,
+                        queen=queen)
+
+    out = Path(args.output) if args.output else Path("logs") / "paired_ab.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+    m = report["metrics"]
+    if not m:
+        print("Paired A/B: no measurable turns "
+              f"({report['first_mention_excluded']} first-mention excluded, "
+              f"{report['no_facts_excluded']} no-facts excluded)")
+        print(f"Wrote {out.resolve()}")
+        return 0
+    print("Paired A/B — hive context vs FIFO window, same model, same turns")
+    print(f"  turns compared      : {m['turns_compared']} "
+          f"(first-mention excluded {m['first_mention_excluded']})")
+    print(f"  answer recall       : hive {m['hive_answer_recall']}% "
+          f"vs FIFO {m['fifo_answer_recall']}% "
+          f"(fixture-fact presence in replies)")
+    print(f"  avg fact hit ratio  : hive {m['hive_avg_fact_hit_ratio']} "
+          f"vs FIFO {m['fifo_avg_fact_hit_ratio']}")
+    print(f"  hive >= FIFO answers: {m['hive_ge_fifo_ratio']}% "
+          f"(strict hive-only {m['strict_hive_only_ratio']}%)")
+    print(f"  answer buckets      : hive_only {m['hive_only']} / "
+          f"fifo_only {m['fifo_only']} / both {m['both_sufficient']} / "
+          f"neither {m['neither_sufficient']}")
+    print(f"  context sufficiency : hive {m['ctx_hive_ge_fifo_ratio']}% "
+          f">= FIFO (P3-style)")
+    if m.get("queen_hive_sufficient_rate") is not None:
+        print(f"  queen sufficiency   : hive {m['queen_hive_sufficient_rate']}% "
+              f"vs FIFO {m['queen_fifo_sufficient_rate']}%")
+    print(f"Wrote {out.resolve()}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

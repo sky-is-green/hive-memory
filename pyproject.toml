@@ -16,6 +16,7 @@ hivebench-probe = "experiments.model_probe:main"
 hivebench-diagnostic = "experiments.retrieval_diagnostic:main"
 hivebench-gate-ab = "experiments.confirmation_gate_ab:main"
 hivebench-compare = "experiments.run_compare:main"
+hivebench-ab = "experiments.paired_ab:main"
 hivebench-harness = "harness.__main__:main"
 
 # Three package roots, flat import names preserved:
