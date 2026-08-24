@@ -82,7 +82,7 @@ importable from anywhere; `conftest.py` covers from-source pytest runs.
 | `hive/vocab/` | `code.json`, `general.json` (domain relevance vocab) |
 | **`hivebench/` — the evaluation suite** | |
 | `hivebench/testing/` | `ab_test.py`, `ablation.py`, `optimization.py`, `shadow_mode.py` |
-| `hivebench/experiments/` | `generate_data.py` (live benchmark), `run_p1_p10.py` (protocol), `p5_targeted_masking.py`, `dashboard.py` (KeepAwake + terminal dashboard), `launcher.py` (Tkinter run app), **`retrieval_diagnostic.py`** (deterministic P2, fixture ground truth — no queen confound), **`model_probe.py`** (fast all-models speed sweep), **`encoder_probe.py`** + **`contrastive_finetune.py`** (B avenue), **`comb_probe.py`** (P11 lexical probe), **`human_label.py`** (P7 raters), **`p9_densest_duplicate.py`** (P9 A/B) |
+| `hivebench/experiments/` | `generate_data.py` (live benchmark), `run_p1_p10.py` (protocol), `p5_targeted_masking.py`, `dashboard.py` (KeepAwake + terminal dashboard), `launcher.py` (Tkinter run app), **`retrieval_diagnostic.py`** (deterministic P2, fixture ground truth — no queen confound), **`model_probe.py`** (fast all-models speed sweep), **`encoder_probe.py`** + **`contrastive_finetune.py`** (B avenue), **`comb_probe.py`** (P11 lexical probe), **`human_label.py`** (P7 raters), **`p9_densest_duplicate.py`** (P9 A/B), **`paired_ab.py`** (live hive-vs-FIFO answer-quality A/B — `hivebench-ab`) |
 | `hivebench/tests/` | `run_hive_tests.py` (grouped runner), `unit/`, `integration/`, `benchmarks/`, `fixtures/` (synthetic conversations incl. prose, horizon, p9, return corpora) |
 | `hivebench/benchmarks/` | `results/` (benchmark output, gitignored) |
 | **`harness/` — the studio sidecar** | |
@@ -1179,6 +1179,30 @@ are serialized per conversation, blocking (streaming is v2).
   (8.5 s), loaded by the managed server on port 1235, and two hive turns ran
   real curation + generation; turn 2 retrieved turn-1 content into context.
 
+### 12.3 dsh agent in the console (2026-08-24) — the full harness loop
+
+- **Bridge**: `harness/harness/agent.py` — one persistent
+  `deepseek_harness.DeepSeekHarness` runtime (Python SDK from the pinned
+  fork, installed editable: `python/sdk` + `python/sdk-runtime`), sessions
+  keyed `agent-<conversation_id>`, auto-rebuilt when the target
+  base_url/api_key/model changes. `POST /v1/agent/stream` SSEs shaped
+  activity (`tool`, `assistant`, `done`) to the console.
+- **Runtime carrier**: Windows has no exe wheel — the dev **node carrier**
+  is staged from the fork (`pnpm --filter dsh-jsonrpc-agent-pkg deploy` +
+  `scripts/stage-node-carrier.mjs` fixups) and opted into via
+  `DSH_RUNTIME_MODE=node`. `pip install -e` both SDK packages.
+- **Model**: agent brain = Gemma 4 26B-A4B UD-Q4_K_M (15.8 GB, unsloth) via
+  the hub pipeline; native tool tokens (Gemma 3's lack of them was the root
+  cause of narration-instead-of-action). Auto-start picks it as newest GGUF.
+- **Windows shell fix**: the runtime's bash tool needs Git-for-Windows' bash
+  — `_runtime_env()` prepends it to the subprocess PATH.
+- **Live proof**: agent turn ran `echo GEMMA4-TOOLS-WORK` through real bash
+  tool calls (call → result → reported), `finish=completed`; hive-direct
+  chat on the same model works alongside.
+- **UI**: chat pane has a Hive/Agent mode radio; agent mode renders tool
+  activity as system chips and committed assistant steps as the reply
+  bubble, ending with `dsh agent · <finish_reason>`.
+
 ## 13. Live-run history (each informed fixes)
 
 - `runs/20260820_222808` — very first live attempt; failed instantly
@@ -1366,6 +1390,20 @@ artifacts that kept PES RED are fixed and individually proven (§6.1).
    chronicler-built live imprint.
 6. **Optional: package** — `pyproject.toml` (exists), CLI entry points,
    LICENSE, CI — only after live evidence.
+7. **Paired A/B evidence run (in progress, 2026-08-24).** The new
+   `experiments.paired_ab` (`hivebench-ab`) generates the model's answer under
+   hive context and under the FIFO 4k window on the same turns and scores both
+   deterministically. Interim live results (bonsai-27b, `--max-tokens 120
+   --no-thinking`): on the code corpus (26 turns) FIFO fixture-fact recall
+   80.8% vs hive 65.4%, but hive context fidelity (answer terms sourced from
+   the arm's own context) 0.499 vs FIFO 0.192, hive > FIFO on 76.9% of turns;
+   on `long_001` (23 turns) recall 73.9% vs 60.9%, fidelity 0.588 vs 0.154,
+   hive > FIFO on 87% of turns, context sufficiency 80% >= FIFO. The naive
+   window has not yet hit its truncation regime on code corpora (short chunks
+   fit in 4k); the prose-horizon run is the decisive truncation test. Lesson:
+   on generic-topic corpora the model answers from world knowledge, so
+   fixture-fact recall under-credits curation — context fidelity is the
+   cleaner signal.
 
 **Long runs are slow because** generation dominates (~20–50s/turn on
 bonsai-27b; `prism-ml/bonsai-27b` ~12.7 tps, no reasoning). The full canonical
@@ -1375,6 +1413,26 @@ faster MoE family if a thinking-capable model is loaded.
 ---
 
 ## 15. Command cheat sheet
+
+**Paired A/B (hive vs FIFO answers on the same turns; the LLM-performance
+head-to-head PES cannot make alone):** the same model generates a reply under
+hive-curated context and under the naive FIFO 4k window on every retrievable
+turn; both replies are scored deterministically on fixture-fact presence and on
+*context fidelity* (share of the answer's terms sourced from the arm's own
+context; optional LLM-queen sufficiency). Resumable across kills.
+
+```powershell
+# live evidence run (bonsai honors --no-thinking; gemma/qwen3.8 burn output on
+# hidden CoT and return empty replies under a cap — use --no-thinking + a model
+# that honors it)
+.\.venv\Scripts\python -m experiments.paired_ab --live --model prism-ml/bonsai-27b --conversations hivebench/tests/fixtures/generated_prose_horizon --max-convs 2 --max-turns 45 --confidence off --max-tokens 120 --no-thinking --checkpoint-every 2 --output runs/paired_ab_prose.json --checkpoint runs/paired_ab_prose.ckpt.json
+
+# resume a killed run (same flags + --resume <ckpt>)
+.\.venv\Scripts\python -m experiments.paired_ab --live --model prism-ml/bonsai-27b --conversations hivebench/tests/fixtures/generated_prose_horizon --max-convs 2 --max-turns 45 --confidence off --max-tokens 120 --no-thinking --checkpoint-every 2 --output runs/paired_ab_prose.json --checkpoint runs/paired_ab_prose.ckpt.json --resume runs/paired_ab_prose.ckpt.json
+
+# offline harness check
+.\.venv\Scripts\python -m experiments.paired_ab --mock
+```
 
 **CLI entry points (2026-08-24, `pyproject.toml [project.scripts]`):**
 `hivebench` (= `generate_data`), `hivebench-protocol`, `hivebench-probe`,
