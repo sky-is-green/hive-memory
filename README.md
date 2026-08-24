@@ -35,6 +35,55 @@ hive vs naive FIFO windowing (live run `20260822_211131`):
 latency/throughput/utilization) — a health signal, not a measure of answer
 quality. The head-to-head evidence above is what the claims rest on.*
 
+**Why Hive is a great addition to LLM use**
+
+- **Bounded cost, always.** The hive caps the context window regardless of
+  conversation length (adaptive budget: 1–3k tokens live), so per-turn cost and
+  generation time stay flat instead of growing with history.
+- **It drops in around your existing backend.** Any OpenAI-compatible endpoint
+  (LM Studio, llama.cpp, vLLM, hosted APIs) works — no model retraining, no
+  prompt rewrites; the harness exposes it as a drop-in API.
+- **Runs on consumer hardware.** The drones are small CPU models (~60 MB,
+  ~5 ms/query, no GPU required) — verified on an AMD-only rig with no NVIDIA.
+- **The efficiency gap is measured, not claimed:**
+
+| Metric | Hive | Status quo (FIFO/rolling window) |
+|---|---|---|
+| Pipeline efficiency (PES, flagship live run) | **80.0 GREEN** | 12.2 / 11.6 |
+| Decode speed over 308+ turns | **Flat** (14.5→15.5 tps, +6.7%) | Slows as context grows, then truncates |
+| Stated-fact recall (deterministic) | **90.3%** | Facts dropped at window limit |
+| Turns where hive ≥ FIFO (P3) | **85.1%** | — |
+| Context utilization (p50) | **74.5%** | ~40% (fluff) |
+| Added latency per turn | **~18 ms** | 0 (but loses the facts) |
+| Stability (500-turn run) | **0 OOM**, peak RSS 34.7 MB | — |
+
+## Why HiveBench
+
+Most evaluation harnesses tell you how a model performs in a sandbox. HiveBench
+tells you *whether the context you feed the model is the reason it works* — and
+it does it deterministically, offline, and replayably:
+
+- **Falsifiable, not vibes.** The white paper's P1–P12 predictions ship as
+  executable tests with measured PASS/FAIL verdicts. Every number in this README
+  is reproduced by a command in the repo.
+- **No LLM-as-judge circularity in the evidence path.** The deterministic
+  diagnostics score fact presence against fixture ground truth — stated-facts
+  recall, first-mention exclusion, hedge filtering. The queen's verdicts are
+  corroboration, never the evidence.
+- **The full suite runs offline in ~30 seconds** — no LLM, no GPU, no API keys.
+  400+ tests grouped by what they measure (`speed`, `intelligence`, `skills`,
+  `maximum`), plus a `--mock` mode for CI.
+- **Paired head-to-head A/B** (`hivebench-ab`): the same turns, the same model,
+  hive-curated context vs the naive FIFO window — both answers scored
+  deterministically (fixture-fact presence + context fidelity). This is the
+  comparison every other harness skips.
+- **Built for long evidence runs.** Checkpointed, resumable live runs survive
+  crashes and reboots; one-command CLIs (`hivebench`, `hivebench-protocol`,
+  `hivebench-diagnostic`, …) and a self-healing runner for overnight runs.
+- **Honest by design.** The suite surfaced its own failures first — the
+  measurement fixes that made PES trustworthy (latency floor, stated-facts
+  reframe, hedge poisoning) are documented in the paper, not hidden.
+
 - Full offline test suite — no LLM calls needed to verify the pipeline;
   deterministic, replayable evaluation for every claim (P1–P12)
 
