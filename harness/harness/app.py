@@ -892,6 +892,132 @@ def create_app(
         return StreamingResponse(sse(), media_type="text/event-stream")
 
     # ------------------------------------------------------------------
+    # Real OpenAI-compatible passthrough (curated) — Mode A integration
+    # (OpenCode, dsh, any OpenAI client): standard /chat/completions wire
+    # shape, curated system context, the reply observed back into the
+    # store. Conversation key: X-Hive-Conversation header > payload "user"
+    # > "default".
+    @app.post("/v1/openai/chat/completions")
+    async def openai_chat_completions(request: Request):
+        payload = await request.json()
+        messages = payload.get("messages") or []
+        if not messages:
+            raise HTTPException(422, "messages must not be empty")
+        query = ""
+        for m in reversed(messages):
+            content = m.get("content") if m.get("role") == "user" else None
+            if isinstance(content, str) and content.strip():
+                query = content
+                break
+        if not query.strip():
+            raise HTTPException(422, "no user message with text content")
+        cid = (request.headers.get("X-Hive-Conversation")
+               or (payload.get("user") or "") or "default")
+        try:
+            provider = st.registry.resolve(None)
+        except LookupError:
+            raise HTTPException(
+                502, "no provider configured; configure one via /v1/provider/config "
+                     "or providers.local.json")
+        base_url = provider.base_url.rstrip("/")
+        headers = {"Authorization": f"Bearer {provider.api_key or 'lm-studio'}",
+                   **provider.extra_headers}
+        hive = st.hive_for(cid, payload.get("config"), with_backend=False)
+        with st.lock_for(cid):
+            result = hive.process_turn(query, conversation_id=cid)
+            st.save_conversation(cid, hive)
+        curated = result.assembled.content if result.assembled is not None else ""
+        merged_sys = curated or "You are a helpful assistant."
+        if messages and messages[0].get("role") == "system" \
+                and messages[0].get("content"):
+            merged_sys = merged_sys + "\n\n" + messages[0]["content"]
+        stream = bool(payload.get("stream"))
+        upstream = {
+            **payload,
+            "model": provider.model or payload.get("model") or "local",
+            "stream": stream,
+            "messages": [{"role": "system", "content": merged_sys}] + messages[1:],
+        }
+        upstream.setdefault("stream_options", {"include_usage": True})
+
+        def observe(reply: str) -> bool:
+            stored = False
+            if reply.strip() and not (
+                hive.config.filter_hedge_replies
+                and Hive._is_hedge_reply(reply)
+            ):
+                hive.store.add_chunk(hive.turn, reply)
+                st.save_conversation(cid, hive)
+                stored = True
+            return stored
+
+        if not stream:
+            resp = _upstream_stream(
+                f"{base_url}/v1/chat/completions", json=upstream,
+                headers=headers, timeout=600,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            try:
+                observe(data["choices"][0]["message"]["content"] or "")
+            except (KeyError, IndexError):
+                pass
+            return data
+
+        def sse():
+            parts: list[str] = []
+            try:
+                resp = _upstream_stream(
+                    f"{base_url}/v1/chat/completions", json=upstream,
+                    headers=headers, stream=True, timeout=600,
+                )
+                resp.raise_for_status()
+                for raw in resp.iter_lines(decode_unicode=True):
+                    if not raw:
+                        continue
+                    line = raw[6:].strip() if raw.startswith("data:") else raw.strip()
+                    if not line:
+                        continue
+                    if line == "[DONE]":
+                        yield "data: [DONE]\n\n"
+                        break
+                    try:
+                        chunk = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    for choice in chunk.get("choices") or []:
+                        delta = choice.get("delta") or {}
+                        if delta.get("content"):
+                            parts.append(delta["content"])
+                    yield "data: " + json.dumps(chunk) + "\n\n"
+            except Exception as exc:  # noqa: BLE001 - surfaced as an SSE error event
+                yield "data: " + json.dumps({
+                    "error": {"message": str(exc), "type": "hive_upstream_error"},
+                }) + "\n\n"
+            observe("".join(parts))
+
+        return StreamingResponse(sse(), media_type="text/event-stream")
+        reg = ProviderRegistry(default=req.default)
+        for entry in req.providers:
+            data = entry.model_dump()
+            if data.get("api_key") == MASK:
+                # the UI echoes the mask back for untouched keys — keep the
+                # stored secret instead of overwriting it with "***"
+                previous = [p for p in st.registry.providers
+                            if p.name.lower() == str(data.get("name", "")).lower()]
+                data["api_key"] = previous[0].api_key if previous else ""
+            try:
+                reg.providers.append(Provider.from_dict(data))
+            except ValueError as exc:
+                raise HTTPException(422, str(exc))
+        st.registry = reg
+        persisted = None
+        if req.persist:
+            path = save_registry(reg, st.providers_file)
+            persisted = str(path)
+        return {"ok": True, "default": reg.default,
+                "providers": reg.redacted(), "persisted_to": persisted}
+
     @app.post("/v1/provider/config")
     def set_providers(req: ProviderConfigRequest):
         reg = ProviderRegistry(default=req.default)
@@ -970,8 +1096,14 @@ def create_app(
         st.registry.providers = [
             p for p in st.registry.providers if p.name.lower() != "local"
         ] + [prov]
-        if not st.registry.default:
-            st.registry.default = "local"
+        # a managed launch IS the studio's brain: claim the default even if
+        # another provider was set (/provider switches it back explicitly)
+        st.registry.default = "local"
+        try:
+            save_registry(st.registry, st.providers_file)
+        except OSError as exc:
+            print(f"harness: could not persist providers config ({exc})",
+                  file=sys.stderr)
         profile = EngineProfile(
             name="local", kind="llama_cpp", base_url=base_url,
             load_options=load_options

@@ -38,8 +38,172 @@ def client(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# /v1/hive/turn + state + reset
+# /v1/openai/chat/completions (real curated passthrough, Mode A integration)
 # ---------------------------------------------------------------------------
+def _configure_lm_provider(c, base_url="http://mock-llama", model="m1"):
+    r = c.post("/v1/provider/config", json={
+        "providers": [{"name": "lm", "base_url": base_url,
+                       "api_key": "lm-studio", "model": model}],
+    })
+    assert r.status_code == 200, r.text
+
+
+class _FakeUpstream:
+    """Stands in for the provider's /v1/chat/completions."""
+
+    def __init__(self, content="JWT tokens with rotation", sse_chunks=None):
+        self.content = content
+        self.sse_chunks = sse_chunks or []
+
+    def __call__(self, url, json=None, headers=None, stream=False, timeout=None):
+        self.url = url
+        self.payload = json
+        self.stream = stream
+        return self
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return {
+            "id": "up-1", "object": "chat.completion", "created": 1,
+            "model": self.payload.get("model"),
+            "choices": [{"index": 0,
+                         "message": {"role": "assistant", "content": self.content},
+                         "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 6},
+        }
+
+    def iter_lines(self, decode_unicode=True):
+        yield from self.sse_chunks
+
+
+def test_openai_chat_completions_non_stream(client, monkeypatch):
+    c, _app = client
+    _configure_lm_provider(c)
+    import harness.app as appmod
+
+    fake = _FakeUpstream()
+    monkeypatch.setattr(appmod, "_upstream_stream", fake)
+    r = c.post("/v1/openai/chat/completions", json={
+        "model": "prism-ml/bonsai-27b",
+        "messages": [
+            {"role": "system", "content": "be terse"},
+            {"role": "user", "content": "Which tokens do I use for auth expiry?"},
+        ],
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["choices"][0]["message"]["content"] == "JWT tokens with rotation"
+    # client system message preserved behind the curated context placeholder
+    sys_msg = fake.payload["messages"][0]
+    assert sys_msg["role"] == "system"
+    assert "be terse" in sys_msg["content"]
+    # model resolves from the provider config, not the client
+    assert fake.payload["model"] == "m1"
+    # the reply was observed back into the store (2 chunks: query + reply)
+    st = c.get("/v1/hive/state", params={"conversation_id": "default"}).json()
+    assert st["turn"] == 1
+    assert st["store_chunks"] >= 2
+
+
+def test_openai_chat_completions_stream_relays_and_observes(client, monkeypatch):
+    c, _app = client
+    _configure_lm_provider(c)
+    import harness.app as appmod
+
+    chunks = [
+        'data: {"id":"u","object":"chat.completion.chunk","created":1,"model":"m1",'
+        '"choices":[{"index":0,"delta":{"role":"assistant","content":"JWT tokens "},"finish_reason":null}]}',
+        'data: {"id":"u","object":"chat.completion.chunk","created":1,"model":"m1",'
+        '"choices":[{"index":0,"delta":{"content":"with rotation"},"finish_reason":null}]}',
+        'data: {"id":"u","object":"chat.completion.chunk","created":1,"model":"m1",'
+        '"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],'
+        '"usage":{"completion_tokens":6}}',
+        "data: [DONE]",
+    ]
+    fake = _FakeUpstream(sse_chunks=chunks)
+    monkeypatch.setattr(appmod, "_upstream_stream", fake)
+    r = c.post("/v1/openai/chat/completions", json={
+        "model": "x",
+        "stream": True,
+        "messages": [{"role": "user", "content": "Which tokens do I use for auth expiry?"}],
+    })
+    assert r.status_code == 200
+    text = r.text
+    assert "data: [DONE]" in text
+    assert "JWT tokens" in text and "with rotation" in text
+    # reply observed back (non-hedge, stored)
+    st = c.get("/v1/hive/state", params={"conversation_id": "default"}).json()
+    assert st["store_chunks"] >= 2
+
+
+def test_openai_chat_completions_conversation_header_and_errors(client, monkeypatch):
+    c, _app = client
+    import harness.app as appmod
+
+    fake = _FakeUpstream()
+    monkeypatch.setattr(appmod, "_upstream_stream", fake)
+    # no provider configured -> 502
+    r = c.post("/v1/openai/chat/completions", json={
+        "messages": [{"role": "user", "content": "hi"}],
+    })
+    assert r.status_code == 502
+    _configure_lm_provider(c)
+    # empty messages -> 422
+    r = c.post("/v1/openai/chat/completions", json={"messages": []})
+    assert r.status_code == 422
+    # conversation keyed by the X-Hive-Conversation header
+    r = c.post("/v1/openai/chat/completions", json={
+        "messages": [{"role": "user", "content": "Which tokens do I use for auth expiry?"}],
+    }, headers={"X-Hive-Conversation": "proj-a"})
+    assert r.status_code == 200
+    st = c.get("/v1/hive/state", params={"conversation_id": "proj-a"}).json()
+    assert st["turn"] == 1
+
+
+def test_openai_curated_context_feeds_next_turn(tmp_path, monkeypatch):
+    """With distinct drone embeddings (real-drone behavior), the observed
+    reply is curated into the next turn's system message."""
+    import numpy as np
+
+    from harness.app import create_app
+    from experiments.retrieval_diagnostic import _content_terms
+
+    class DistinctUltra(FakeUltraSmall):
+        def embed(self, text):
+            v = np.zeros(16)
+            for i, w in enumerate(sorted(_content_terms(text))[:16]):
+                v[i] = 1.0
+            return v
+
+    def backend_factory(model=None):
+        return OpenAICompatBackend(
+            base_url="http://mock", model=model or "mock-model",
+            transport=MockTransport(latency_ms=0),
+        )
+
+    app = create_app(
+        ultra_factory=DistinctUltra,
+        backend_factory=backend_factory,
+        runs_root=tmp_path / "runs",
+        providers_file=tmp_path / "providers.local.json",
+        log_dir=str(tmp_path / "logs"),
+        state_dir=str(tmp_path / "state"),
+    )
+    fake = _FakeUpstream()
+    monkeypatch.setattr("harness.app._upstream_stream", fake)
+    with TestClient(app) as c:
+        c.post("/v1/provider/config", json={
+            "providers": [{"name": "lm", "base_url": "http://mock-llama",
+                           "api_key": "lm-studio", "model": "m1"}]})
+        for _ in range(2):
+            r = c.post("/v1/openai/chat/completions", json={
+                "messages": [{"role": "user",
+                              "content": "Which tokens do I use for auth expiry?"}],
+            })
+            assert r.status_code == 200
+        assert "JWT tokens" in fake.payload["messages"][0]["content"]
 def test_health_reports_zero_conversations(client):
     c, _app = client
     r = c.get("/health")
