@@ -390,6 +390,7 @@ class ServerStartRequest(BaseModel):
     mlock: bool = False
     no_mmap: bool = False
     api_key: Optional[str] = None  # protect llama-server (--api-key)
+    backend: Optional[str] = None  # vulkan | rocm | cuda | cpu | sycl (binary under tools/backends/<backend>/)
 
     def extra_args(self) -> list[str]:
         args: list[str] = []
@@ -1446,6 +1447,7 @@ def create_app(
                 model=req.model, hf_repo=req.hf_repo, hf_file=req.hf_file,
                 key=req.key, port=req.port, ctx_size=req.ctx_size,
                 ngl=req.ngl, extra_args=req.extra_args(),
+                backend=req.backend,
             )
         except RuntimeError as exc:
             message = str(exc)

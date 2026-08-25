@@ -101,6 +101,82 @@ def test_start_refuses_missing_binary(tmp_path):
     assert "HARNESS_LLAMA_SERVER" in str(exc.value)
 
 
+# ---------------------------------------------------------------------------
+# backend selection (vulkan | rocm | cuda | cpu | sycl)
+# ---------------------------------------------------------------------------
+def test_backend_binary_resolution(tmp_path, monkeypatch):
+    import harness.models as mm
+
+    monkeypatch.setattr(mm, "REPO_ROOT", tmp_path)
+    # unfetched backend -> None; default binary path used instead
+    assert mm._binary_for_backend("rocm") is None
+    assert mm._binary_for_backend("") is None
+    assert mm._binary_for_backend(None) is None
+
+    exe = tmp_path / "tools" / "backends" / "rocm" / "llama-server.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"x")
+    assert mm._binary_for_backend("rocm") == exe
+    assert mm._binary_for_backend(" ROCM ") == exe  # case/whitespace tolerant
+
+
+def test_load_uses_backend_binary(tmp_path, monkeypatch):
+    import harness.models as mm
+
+    monkeypatch.setattr(mm, "REPO_ROOT", tmp_path)
+    rocm_exe = tmp_path / "tools" / "backends" / "rocm" / "llama-server.exe"
+    rocm_exe.parent.mkdir(parents=True)
+    rocm_exe.write_bytes(b"x")
+
+    spawned = {}
+
+    def fake_spawner(cmd, stdout=None, stderr=None):
+        spawned["cmd"] = cmd
+        return FakeProc()
+
+    def fake_prober(base_url):
+        gguf = next((a for a in spawned["cmd"] if a.endswith(".gguf")), "fake")
+        return Path(gguf).stem
+
+    blocker = socket.socket()
+    blocker.bind(("127.0.0.1", 0))
+    free_port = blocker.getsockname()[1]
+    blocker.close()
+
+    mgr = LlamaServerManager(
+        binary=tmp_path / "default" / "llama-server.exe",
+        models_dir=tmp_path / "models" / "gguf",
+        log_dir=tmp_path / "logs",
+        port=free_port,
+        spawner=fake_spawner,
+        prober=fake_prober,
+        startup_timeout=5,
+    )
+    mgr.binary.parent.mkdir(parents=True, exist_ok=True)
+    mgr.binary.write_bytes(b"")
+    gguf = tmp_path / "models" / "gguf" / "tiny.gguf"
+    gguf.write_bytes(b"x")
+
+    mgr.start(model="tiny.gguf", backend="rocm", port=free_port)
+    cmd = spawned["cmd"]
+    assert cmd[0] == str(rocm_exe)  # backend binary wins over the default
+    info = mgr.status()["instances"][0]
+    assert info["backend"] == "rocm"
+
+
+def test_load_unknown_backend_and_missing_backend_binary(tmp_path):
+    mgr = LlamaServerManager(binary=tmp_path / "llama-server.exe",
+                             models_dir=tmp_path / "m",
+                             log_dir=tmp_path / "logs")
+    with pytest.raises(RuntimeError) as exc:
+        mgr.load(model="x", backend="tpu")
+    assert "unknown backend" in str(exc.value)
+
+    with pytest.raises(RuntimeError) as exc:
+        mgr.load(model="x", backend="rocm")
+    assert "fetch_backend.ps1" in str(exc.value)
+
+
 def test_start_refuses_unknown_model_without_hf_fallback(manager):
     with pytest.raises(RuntimeError) as exc:
         manager.start(model="not-downloaded")

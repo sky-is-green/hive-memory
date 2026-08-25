@@ -44,6 +44,20 @@ def _default_binary() -> Path:
     return REPO_ROOT / "tools" / "llama.cpp" / exe
 
 
+BACKENDS = ("vulkan", "rocm", "cuda", "cpu", "sycl")
+
+
+def _binary_for_backend(backend: Optional[str]) -> Optional[Path]:
+    """Per-backend llama-server binary under tools/backends/<backend>/, when
+    present (fetched via tools/fetch_backend.ps1). None when the backend is
+    unknown to the layout or its binary has not been fetched."""
+    if not backend:
+        return None
+    exe = "llama-server.exe" if os.name == "nt" else "llama-server"
+    p = (REPO_ROOT / "tools" / "backends" / backend.strip().lower() / exe)
+    return p if p.is_file() else None
+
+
 def _probe(base_url: str, timeout: float = 5.0):
     """Return the first model id advertised by the server, True if reachable
     but silent about ids, False when unreachable."""
@@ -157,6 +171,8 @@ class ServerInstance:
     pid: Optional[int] = None
     adopted: bool = False
     started_at: str = ""
+    backend: Optional[str] = None
+    binary: str = ""
     proc: object = field(default=None, repr=False, compare=False)
 
     def to_dict(self) -> dict:
@@ -170,6 +186,8 @@ class ServerInstance:
             "pid": self.pid,
             "adopted": self.adopted,
             "started_at": self.started_at,
+            "backend": self.backend,
+            "binary": self.binary,
         }
 
 
@@ -343,11 +361,30 @@ class LlamaServerManager:
         ctx_size: int = 8192,
         ngl: int = 999,
         extra_args: Optional[list[str]] = None,
+        backend: Optional[str] = None,
     ) -> dict:
         """Load one model as its own llama-server instance. Priority: local
         ``model`` > --hf-repo/--hf-file passthrough. Loading the same model
-        twice is rejected; different models coexist on different ports."""
-        if not self.binary.is_file():
+        twice is rejected; different models coexist on different ports.
+
+        ``backend`` selects a per-backend llama-server binary from
+        ``tools/backends/<backend>/`` (vulkan | rocm | cuda | cpu | sycl;
+        fetched via tools/fetch_backend.ps1). Unset/unknown falls back to the
+        default binary."""
+        binary = self.binary
+        backend_name = (backend or "").strip().lower() or None
+        if backend_name and backend_name not in BACKENDS:
+            raise RuntimeError(
+                f"unknown backend '{backend_name}'; known: {', '.join(BACKENDS)}")
+        if backend_name:
+            override = _binary_for_backend(backend_name)
+            if override is None:
+                raise RuntimeError(
+                    f"no llama-server binary for backend '{backend_name}' under "
+                    f"tools/backends/{backend_name}/ - fetch one with "
+                    "tools/fetch_backend.ps1")
+            binary = override
+        if not binary.is_file():
             raise RuntimeError(
                 f"llama-server not found at {self.binary}. Set HARNESS_LLAMA_SERVER "
                 "or extract a llama.cpp Vulkan release into tools/llama.cpp/."
@@ -390,6 +427,8 @@ class LlamaServerManager:
                     pid=listener_pid,
                     adopted=True,
                     started_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+                    backend=backend_name,
+                    binary=str(binary),
                 )
                 with self._lock:
                     self._instances[inst.key] = inst
@@ -400,7 +439,7 @@ class LlamaServerManager:
                 + "; stop that server or pick another port."
             )
 
-        cmd = [str(self.binary)]
+        cmd = [str(binary)]
         if resolved is not None:
             cmd += ["-m", str(resolved)]
         elif hf_repo and hf_file:
@@ -459,6 +498,8 @@ class LlamaServerManager:
             model=model_id or model_name,
             pid=getattr(proc, "pid", None),
             started_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+            backend=backend_name,
+            binary=str(binary),
             proc=proc,
         )
         with self._lock:
