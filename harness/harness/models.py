@@ -378,12 +378,15 @@ class LlamaServerManager:
                 f"unknown backend '{backend_name}'; known: {', '.join(BACKENDS)}")
         if backend_name:
             override = _binary_for_backend(backend_name)
-            if override is None:
+            if override is not None:
+                binary = override
+            elif backend_name != "vulkan":
+                # the default binary IS the vulkan build; anything else must
+                # be fetched explicitly
                 raise RuntimeError(
                     f"no llama-server binary for backend '{backend_name}' under "
                     f"tools/backends/{backend_name}/ - fetch one with "
                     "tools/fetch_backend.ps1")
-            binary = override
         if not binary.is_file():
             raise RuntimeError(
                 f"llama-server not found at {self.binary}. Set HARNESS_LLAMA_SERVER "
