@@ -663,10 +663,10 @@ def create_app(
 
     @app.post("/v1/hive/observe")
     def hive_observe(req: ObserveRequest):
-        with st.global_lock:
-            hive = st.hives.get(req.conversation_id)
-        if hive is None:
-            raise HTTPException(404, f"no such conversation: {req.conversation_id}")
+        # lazily create: external integrators may observe before ever calling
+        # curate (e.g. feeding back a reply for a session the studio has
+        # never seen); the conversation materializes here.
+        hive = st.hive_for(req.conversation_id, None, with_backend=False)
         reply = (req.reply or "").strip()
         stored = False
         if reply and not (

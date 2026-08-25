@@ -468,11 +468,15 @@ def test_observe_hedge_reply_not_stored(client):
     assert r == {"ok": True, "stored": False, "turn": 1}
 
 
-def test_observe_unknown_conversation_404(client):
+def test_observe_unknown_conversation_lazy_creates(client):
     c, _app = client
-    assert c.post("/v1/hive/observe", json={
-        "conversation_id": "ghost", "reply": "text",
-    }).status_code == 404
+    r = c.post("/v1/hive/observe", json={
+        "conversation_id": "ghost", "reply": "stored text",
+    })
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "stored": True, "turn": 0}
+    st = c.get("/v1/hive/state", params={"conversation_id": "ghost"}).json()
+    assert st["store_chunks"] >= 1
 
 
 def test_mock_chat_completions_non_stream_reports_context(client):
