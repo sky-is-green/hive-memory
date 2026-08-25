@@ -18,11 +18,17 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import threading
 from pathlib import Path
 from typing import Callable, Optional
 
-from deepseek_harness import DeepSeekHarness
+# The vendored dsh Python SDK ships inside this repo (vendor/deepseek_harness)
+# so the sidecar runs from a clean checkout without an editable install of the
+# fork's SDK. Inserted before the import below.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "vendor"))
+
+from deepseek_harness import DeepSeekHarness  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
