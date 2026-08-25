@@ -30,6 +30,7 @@ dependencies = [
 harness = [
     "fastapi>=0.110",
     "uvicorn>=0.29",
+    "pydantic>=2.12,<3",
 ]
 bench = [
     "pytest>=8.0",

@@ -453,7 +453,7 @@ def render_server_page() -> str:
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>Studio server &amp; models</title>
 <style>{_SERVER_CSS}</style></head><body>
-<h1>HiveBench Studio console</h1>
+<h1>Hive Studio console</h1>
 
 <div class="grid">
 

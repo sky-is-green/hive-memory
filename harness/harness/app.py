@@ -536,7 +536,7 @@ def create_app(
             kw["model"] = model
         return OpenAICompatBackend(**kw)
 
-    app = FastAPI(title="HiveBench Studio harness", version="0.1.0")
+    app = FastAPI(title="Hive Studio", version="0.1.0")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_cors_origins(),
