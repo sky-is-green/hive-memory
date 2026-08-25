@@ -308,6 +308,9 @@ _SERVER_CSS = _CSS + """
  .msg .meta { display: block; font-size: .72rem; color: #8a99a8;
               margin-top: .3rem; }
  .msg.user .meta { color: rgba(255,255,255,.75); }
+ @keyframes hiveblink { 0%,100% { opacity: .15; } 50% { opacity: 1; } }
+ .msg.ai.typing::after { content: '···'; letter-spacing: .18rem;
+        animation: hiveblink 1.1s infinite; }
  .msg.sys { align-self: center; background: #eef2f6; color: #5a6b7d;
         font-size: .8rem; padding: .25rem .7rem; border-radius: 999px; }
  #chatin { flex: 1; }
@@ -480,7 +483,7 @@ def render_server_page() -> str:
 <span class="sugwrap"><input id="hfrepo" placeholder="--hf-repo (type to search)" size="30">
 <div class="sugbox" id="sug-hfrepo"></div></span>
 <input id="hffile" placeholder="--hf-file" size="18">{tip('Hugging Face source: repo id plus the exact GGUF filename inside it.')}
-<button onclick="startServer()">Start</button></div>
+<button onclick="startServer(this)">Start</button></div>
 <details><summary>Advanced launch flags</summary>
 <div class="row">
 <label class="inline">threads {tip('CPU threads for inference; blank = automatic.')} <input id="l-threads" type="number" size="3" placeholder="auto"></label>
@@ -626,7 +629,7 @@ providers.local.json (gitignored).</div>
        onkeydown="if (event.key === 'Enter') chatSubmit()" autocomplete="off">
 <div class="sugbox" id="sug-chat"></div></span>
 <button id="sendbtn" onclick="chatSubmit()">Send</button>
-<button id="stopbtn" onclick="cancelAgent()">Stop</button>
+<button id="stopbtn" onclick="cancelStream()">Stop</button>
 <button id="savebtn" onclick="saveSession()">Save session</button>{tip('Name and keep this session as a tab. Tabs and transcripts survive page reloads.')}
 <button onclick="newConversation()">+ New session</button>{tip('Opens a fresh session tab right away; the current one stays in the tab strip.')}
 </div>
@@ -652,7 +655,7 @@ turns, durable session log.</div>
 <div class="row"><span class="sugwrap" style="width:100%"><input id="drepo" placeholder="repo id (type for suggestions)" style="width:100%">
 <div class="sugbox" id="sug-drepo"></div></span><br>
 <input id="dfile" placeholder="file.gguf" size="24">{tip('Exact GGUF filename inside that repo (copy it from the search results).')}
-<button onclick="download()">Download</button></div>
+<button onclick="download(this)">Download</button></div>
 <pre id="downloads"></pre>
 </section>
 </div>
@@ -996,6 +999,7 @@ document.getElementById('chatin').addEventListener('input', e => {{
 loadChatCommands();
 
 async function sendChat() {{
+  if (streamBusy) return;              /* one stream at a time */
   const input = document.getElementById('chatin');
   const query = input.value.trim();
   if (!query) return;
@@ -1003,22 +1007,26 @@ async function sendChat() {{
   if (chatMode() === 'agent') return sendAgent(query);
   bubble('user', query);
   record('user', query);
-  const ai = bubble('ai', '…');
+  const ai = bubble('ai', '');
+  ai.classList.add('typing');
+  setBusy(true);
+  const ctrl = new AbortController();
+  streamAbort = ctrl;
   const body = {{query: query, conversation_id: convId}};
   const provSel = document.getElementById('chat-provider').value;
   if (provSel) body.provider = provSel;
   if (Object.keys(hiveOverrides).length) body.config = hiveOverrides;
   let text = '';
   let turn = '?';
+  let metaText = '';
   try {{
     const r = await fetch('/v1/hive/stream', {{method: 'POST',
       headers: {{'content-type': 'application/json'}},
-      body: JSON.stringify(body)}});
+      body: JSON.stringify(body), signal: ctrl.signal}});
     if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
     const reader = r.body.getReader();
     const dec = new TextDecoder();
     let buf = '';
-    let metaText = '';
     while (true) {{
       const {{done, value}} = await reader.read();
       if (done) break;
@@ -1029,6 +1037,7 @@ async function sendChat() {{
         if (!frame.startsWith('data: ')) continue;
         const ev = JSON.parse(frame.slice(6));
         if (ev.type === 'delta') {{
+          if (!text) ai.classList.remove('typing');
           text += ev.text;
           ai.textContent = text;
           log_scroll();
@@ -1041,29 +1050,68 @@ async function sendChat() {{
             + (ev.tokens_per_sec ? ` · ${{ev.tokens_per_sec}} tok/s` : '')
             + (ev.stored ? '' : ' · not stored');
         }} else if (ev.type === 'error') {{
-          metaText = 'error: ' + ev.error;
+          metaText = 'error: ' + friendlyError(ev.error);
         }}
       }}
     }}
-    ai.textContent = text || '(empty reply)';
-    const m = document.createElement('span');
-    m.className = 'meta';
-    m.textContent = metaText;
-    ai.appendChild(m);
+    ai.classList.remove('typing');
+    if (!text && metaText) {{
+      /* error-only turn: show the message itself, not an empty bubble */
+      ai.textContent = metaText;
+    }} else {{
+      ai.textContent = text || '(empty reply)';
+      const m = document.createElement('span');
+      m.className = 'meta';
+      m.textContent = metaText;
+      ai.appendChild(m);
+    }}
     if (body.inspection !== undefined && body.inspection) {{
       renderInspection(body.inspection);
     }} else {{
       fetchInspection();
     }}
   }} catch (e) {{
-    ai.textContent = 'request failed: ' + e.message;
-    record('ai', 'request failed: ' + e.message);
+    ai.classList.remove('typing');
+    const cancelled = e && e.name === 'AbortError';
+    const msg = cancelled ? 'cancelled.'
+      : 'request failed: ' + friendlyError(e.message);
+    ai.textContent = msg;
+    record('ai', msg);
+    if (!input.value) input.value = query;   /* give the draft back */
+  }} finally {{
+    streamAbort = null;
+    setBusy(false);
   }}
 }}
 
+let streamBusy = false;
+let streamAbort = null;
 function setBusy(b) {{
+  streamBusy = b;
   document.getElementById('stopbtn').style.display = b ? '' : 'none';
   document.getElementById('sendbtn').disabled = b;
+}}
+
+/* Map backend/sidecar failure text to something a user can act on. The
+   SSE `error` frame carries raw Python exception strings today; this is
+   the client-side translation layer until the server emits clean copy. */
+function friendlyError(msg) {{
+  const s = String(msg || '');
+  const low = s.toLowerCase();
+  if (low.includes(':1234') || low.includes('max retries') ||
+      low.includes('failed to establish') || low.includes('connection refused'))
+    return 'No backend reachable on :1234 — start a server from the Models '
+         + 'tab, or pick another provider.';
+  if (low.includes('failed to fetch') || low.includes('networkerror') ||
+      low.includes('load failed'))
+    return 'Sidecar unreachable — is the harness process still running?';
+  if (s.length > 300) return s.slice(0, 300) + '…';
+  return s;
+}}
+
+function cancelStream() {{
+  if (chatMode() === 'agent') return cancelAgent();
+  if (streamAbort) streamAbort.abort();
 }}
 
 async function cancelAgent() {{
@@ -1193,12 +1241,15 @@ function launchBody() {{
   }};
 }}
 
-async function startServer() {{
-  const r = await fetch('/v1/server/start', {{method: 'POST',
-    headers: {{'content-type': 'application/json'}},
-    body: JSON.stringify(launchBody())}});
-  show('status', await r.text());
-  refresh();
+async function startServer(btn) {{
+  if (btn) btn.disabled = true;          /* slow POST — no double submits */
+  try {{
+    const r = await fetch('/v1/server/start', {{method: 'POST',
+      headers: {{'content-type': 'application/json'}},
+      body: JSON.stringify(launchBody())}});
+    show('status', await r.text());
+    refresh();
+  }} finally {{ if (btn) btn.disabled = false; }}
 }}
 
 async function searchHub() {{
@@ -1211,11 +1262,14 @@ async function searchHub() {{
   }} catch (e) {{ show('hub', String(e)); }}
 }}
 
-async function download() {{
-  const r = await fetch('/v1/models/hub/download', {{method: 'POST',
-    headers: {{'content-type': 'application/json'}},
-    body: JSON.stringify({{repo: val('drepo'), file: val('dfile')}})}});
-  show('downloads', await r.text());
+async function download(btn) {{
+  if (btn) btn.disabled = true;          /* slow POST — no double submits */
+  try {{
+    const r = await fetch('/v1/models/hub/download', {{method: 'POST',
+      headers: {{'content-type': 'application/json'}},
+      body: JSON.stringify({{repo: val('drepo'), file: val('dfile')}})}});
+    show('downloads', await r.text());
+  }} finally {{ if (btn) btn.disabled = false; }}
 }}
 
 /* --------------------------- engines tab ----------------------------- */
