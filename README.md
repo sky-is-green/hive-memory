@@ -5,54 +5,80 @@
 **HiveMemory** is an external, multi-agent context-curation layer for
 long-horizon LLM conversations. It sits between a user and a local LLM backend,
 filtering, scoring, compressing, and reassembling conversation history into a
-bounded, high-relevance context window for every turn — so a generative model
+bounded, high-relevance context window for every turn, so a generative model
 performs well over arbitrarily long conversations on consumer hardware.
 
 **HiveBench** is its evaluation suite: unit/integration/benchmark tests, a live
 benchmark harness, and the white paper's falsifiable predictions
-([P1–P11](HIVE-WHITE-PAPER.md#5-hypotheses-and-predictions)) with measured
+([P1-P11](HIVE-WHITE-PAPER.md#5-hypotheses-and-predictions)) with measured
 verdicts.
+
+## Quickstart
+
+Requires Python 3.10+ and, for live runs, any OpenAI-compatible backend (LM Studio on `localhost:1234`), or nothing at all: the studio can manage a local
+`llama-server` for you from GGUF files dropped into `models/gguf/`.
+
+```powershell
+git clone https://github.com/sky-is-green/hive-memory.git
+cd hive-memory
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -e ".[harness,bench]"
+.\.venv\Scripts\python -m harness --setup   # creates config, probes backend, warms the drone
+.\.venv\Scripts\python -m harness           # studio UI on http://127.0.0.1:8765
+```
+
+Linux/macOS: `python3 -m venv .venv && .venv/bin/python -m pip install -e ".[harness,bench]"`.
+Narrower layers install cleanly too:
+
+| Install target | What you get |
+|---|---|
+| `pip install hive-memory` | The system: drones, cortex, retention, backends |
+| `pip install "hive-memory[harness]"` | + HiveBench Studio (FastAPI sidecar) |
+| `pip install "hive-memory[bench]"` | + the evaluation suite (pytest, ST trainer) |
+
+The full fresh-machine walkthrough (fixtures, live benchmark, troubleshooting)
+is `docs/INSTALL.md`; every claim below is reproduced by commands in this repo.
 
 ## Why Hive
 
 The core idea is the white paper's *Separation Postulate*: small bidirectional
-"drone" encoders (fast, cheap, CPU-friendly) do the *comprehension* — scoring,
-filtering, and routing context — while the primary generative LLM does the
+"drone" encoders (fast, cheap, CPU-friendly) do the *comprehension*, scoring,
+filtering, and routing context, while the primary generative LLM does the
 *generation*.
 
-**The headline measurement** — same 308+ turn conversations, same model,
+**The headline measurement**: same 308+ turn conversations, same model,
 hive vs naive FIFO windowing (live run `20260822_211131`):
 
-- **[Hive ≥ FIFO on 85.1% of retrievable turns](HIVE-WHITE-PAPER.md#p3--context-sufficiency-hypothesis) (P3)** —
+- **[Hive ≥ FIFO on 85.1% of retrievable turns](HIVE-WHITE-PAPER.md#p3-context-sufficiency-hypothesis) (P3)**;
   the direct head-to-head against the current standard
-- **[90.3% of the facts the model stated made it into context](HIVE-WHITE-PAPER.md#p2--retrieval-precision-hypothesis)** (P2) — deterministic
+- **[90.3% of the facts the model stated made it into context](HIVE-WHITE-PAPER.md#p2-retrieval-precision-hypothesis)** (P2), deterministic
   diagnostic, ≥90% target; FIFO truncates and drops facts at its window
   limit
-- **[Flat generation speed across 308+ turns](HIVE-WHITE-PAPER.md#p1--constant-throughput-hypothesis)** (P1) — 14.5 → 15.5 decode tps
+- **[Flat generation speed across 308+ turns](HIVE-WHITE-PAPER.md#p1-constant-throughput-hypothesis)** (P1), 14.5 → 15.5 decode tps
   (+6.7%), no context-bloat slowdown
 - All at ~3.4 ms assembly + ~15 ms drone scoring overhead per turn
 
 ![Post-run PES: hive 80.0 GREEN vs rolling 12.2 / FIFO 11.6](figures/pes.png)
 
 *PES is the system's own pipeline-efficiency score (retrieval/routing/
-latency/throughput/utilization) — a health signal, not a measure of answer
+latency/throughput/utilization), a health signal, not a measure of answer
 quality. The head-to-head evidence above is what the claims rest on.*
 
 **Why Hive is a great addition to LLM use**
 
 - **Bounded cost, always.** The hive caps the context window regardless of
-  conversation length (adaptive budget: 1–3k tokens live), so per-turn cost and
+  conversation length (adaptive budget: 1-3k tokens live), so per-turn cost and
   generation time stay flat instead of growing with history. And because KV
   compression is a *precision* axis while curation is a *selection* axis, the
   savings compound rather than compete: paired with a TurboQuant-class KV
-  quantizer (~3–4 bits, near-zero loss), a hive-curated context makes a
-  50k-token conversation's cache ~150× smaller than raw history — selection
+  quantizer (~3-4 bits, near-zero loss), a hive-curated context makes a
+  50k-token conversation's cache ~150× smaller than raw history, selection
   multiplies precision on the surviving tokens (white paper §1.6).
 - **It drops in around your existing backend.** Any OpenAI-compatible endpoint
-  (LM Studio, llama.cpp, vLLM, hosted APIs) works — no model retraining, no
+  (LM Studio, llama.cpp, vLLM, hosted APIs) works, no model retraining, no
   prompt rewrites; the harness exposes it as a drop-in API.
 - **Runs on consumer hardware.** The drones are small CPU models (~60 MB,
-  ~5 ms/query, no GPU required) — verified on an AMD-only rig with no NVIDIA,
+  ~5 ms/query, no GPU required), verified on an AMD-only rig with no NVIDIA,
   where FP8-attention paths don't exist (the exact gap TurboQuant-class KV
   quantization fills).
 - **The efficiency gap is measured, not claimed:**
@@ -60,13 +86,13 @@ quality. The head-to-head evidence above is what the claims rest on.*
 | Metric | Hive | Status quo (FIFO/rolling window) |
 |---|---|---|
 | Pipeline efficiency (PES, flagship live run) | **80.0 GREEN** | 12.2 / 11.6 |
-| [Decode speed over 308+ turns](HIVE-WHITE-PAPER.md#p1--constant-throughput-hypothesis) (P1) | **Flat** (14.5→15.5 tps, +6.7%) | Slows as context grows, then truncates |
-| [Stated-fact recall](HIVE-WHITE-PAPER.md#p2--retrieval-precision-hypothesis) (P2, deterministic) | **90.3%** | Facts dropped at window limit |
-| [Turns where hive ≥ FIFO](HIVE-WHITE-PAPER.md#p3--context-sufficiency-hypothesis) (P3) | **85.1%** | — |
+| [Decode speed over 308+ turns](HIVE-WHITE-PAPER.md#p1-constant-throughput-hypothesis) (P1) | **Flat** (14.5→15.5 tps, +6.7%) | Slows as context grows, then truncates |
+| [Stated-fact recall](HIVE-WHITE-PAPER.md#p2-retrieval-precision-hypothesis) (P2, deterministic) | **90.3%** | Facts dropped at window limit |
+| [Turns where hive ≥ FIFO](HIVE-WHITE-PAPER.md#p3-context-sufficiency-hypothesis) (P3) | **85.1%** | - |
 | Paired A/B under window pressure (82 turns, live) | **84.1% overall; 87.5% vs 82.1% late-turn, once the window drops facts** | 84.1% while its window still holds everything |
 | Context utilization (p50) | **74.5%** | ~40% (fluff) |
 | Added latency per turn | **~18 ms** | 0 (but loses the facts) |
-| Stability (500-turn run) | **0 OOM**, peak RSS 34.7 MB | — |
+| Stability (500-turn run) | **0 OOM**, peak RSS 34.7 MB | - |
 
 All numbers are the live runs recorded in the white paper's measured-outcome
 table (§8); PES is defined in §6. The paired A/B row is the fair-selection
@@ -78,33 +104,33 @@ window starts dropping facts.
 ![Context tokens delivered per turn: hive stays flat while unbounded history grows to 33k+ tokens](figures/token_growth.svg)
 
 *Median context tokens per user turn across 721 live turns (two run bundles):
-the hive delivers a flat ~1.2–1.4k-token window regardless of session length,
+the hive delivers a flat ~1.2-1.4k-token window regardless of session length,
 while the unbounded history it replaces reaches 33,500+ tokens by turn 40.*
 
 ## Why HiveBench
 
 Most evaluation harnesses tell you how a model performs in a sandbox. HiveBench
-tells you *whether the context you feed the model is the reason it works* — and
+tells you *whether the context you feed the model is the reason it works*, and
 it does it deterministically, offline, and replayably:
 
 - **Falsifiable, not vibes.** The white paper's
-  [P1–P11 predictions](HIVE-WHITE-PAPER.md#5-hypotheses-and-predictions) ship as
+  [P1-P11 predictions](HIVE-WHITE-PAPER.md#5-hypotheses-and-predictions) ship as
   executable tests with measured PASS/FAIL verdicts (§8). Every number in this
   README is reproduced by a command in the repo.
 - **No LLM-as-judge circularity in the evidence path.** The deterministic
-  diagnostics score fact presence against fixture ground truth — stated-facts
-  recall, first-mention exclusion, hedge filtering. **The Hive queen** — an
+  diagnostics score fact presence against fixture ground truth, stated-facts
+  recall, first-mention exclusion, hedge filtering. **The Hive queen**, an
   asynchronous ground-truth layer that labels, after each turn, whether the
-  assembled context was actually sufficient for the query — corroborates that
+  assembled context was actually sufficient for the query, corroborates that
   evidence; because it shares the served model's biases, it never constitutes
   it (§9, Threat 1).
-- **The full test suite runs offline in ~30 seconds** — no LLM calls and no API
+- **The full test suite runs offline in ~30 seconds**: no LLM calls and no API
   keys; CI-friendly via `--mock`. 500+ tests grouped by what they measure
   (`speed`, `intelligence`, `skills`, `maximum`). (Running the system *live*
-  does require a local model backend — LM Studio / llama.cpp — which on most
+  does require a local model backend, LM Studio / llama.cpp, which on most
   rigs means a GPU; the drones themselves stay on CPU.)
 - **Paired head-to-head A/B** (`hivebench-ab`): the same turns, the same model,
-  hive-curated context vs the naive FIFO window — both answers scored
+  hive-curated context vs the naive FIFO window, both answers scored
   deterministically (fixture-fact presence + context fidelity), with both
   arms' stores replaying identical history so the comparison isolates
   selection. The scoring path is unit-tested; interim live results are
@@ -120,10 +146,48 @@ it does it deterministically, offline, and replayably:
 
   One-command CLIs (`hivebench`, `hivebench-protocol`, `hivebench-diagnostic`,
   …) wrap the rest.
-- **Honest by design.** The suite surfaced its own failures first — the
+- **Honest by design.** The suite surfaced its own failures first, the
   measurement fixes that made PES trustworthy (latency floor, stated-facts
   reframe, hedge poisoning) are documented in the paper's threats section
   (§9), not hidden.
+
+## FAQ
+
+Objections we actually hear, answered with what ships in this repo.
+
+**Does my data leave my machine?**
+Not by default, and the default is the product: conversations are curated by
+CPU-resident drones against a backend you host (LM Studio / llama.cpp on
+localhost; the studio can manage a local `llama-server` for you), stores and
+archives live in local files, and the studio binds `127.0.0.1`. Nothing phones
+home. Hosted APIs only come into play if you put keys in
+`providers.local.json` (gitignored) yourself, and then only the requests you
+point at that provider leave.
+
+**How is this different from mem0 / Letta / Hindsight?**
+They are agent-memory frameworks: append experience, retrieve it later, inside
+their own runtime. HiveMemory overlaps on the goal (long-horizon context that
+stays useful) but differs on three things. It is *evaluation-first*: the
+HiveBench protocol publishes falsifiable predictions with measured PASS/FAIL
+verdicts, including its own failed ones, instead of demo numbers. Its curation
+is a *bounded* relevance-ranked window under decay, dedup, and drift policies,
+so per-turn cost stays flat while unbounded memory grows. And it sits in front
+of any OpenAI-compatible backend as a drop-in layer or endpoint, no SDK lock-in
+and no model changes. Use them when you want managed memory features inside
+their runtimes; use this when you want bounded cost and claims you can re-run.
+
+**Why not just use a bigger context window?**
+Because window size is not usable-context size: models under-use mid-window
+content (lost-in-the-middle), every turn pays for the whole history, and at
+the limit a rolling window blindly evicts exactly the early facts long
+conversations need (white paper §1.1). A bigger window moves the cliff; the
+hive removes the growth, feeding a flat 1-3k curated window at constant decode
+speed (P1) while stated-fact recall measures 90.3% (P2).
+
+**Is this just RAG?**
+RAG retrieves from an external corpus per query. The hive retrieves from *the
+conversation itself*, continuously, through decay/dedup/drift retention
+policies, and composes with RAG rather than competing with it (white paper §2).
 
 ## Repo layout
 
@@ -134,33 +198,9 @@ it does it deterministically, offline, and replayably:
 | `harness/` | HiveBench Studio sidecar (FastAPI service over the hive) |
 | `docs/` | Full-stack install guide + integration guides (OpenCode, dsh, your own harness) |
 
-## Install
-
-Requires Python 3.10+. Pick the layer you need — they install cleanly:
-
-```powershell
-# Windows (PowerShell)
-python -m venv .venv
-.\.venv\Scripts\python -m pip install -e ".[harness,bench]"
-```
-
-```bash
-# Linux / macOS
-python3 -m venv .venv
-.venv/bin/python -m pip install -e ".[harness,bench]"
-```
-
-| Install target | What you get |
-|---|---|
-| `pip install hive-memory` | The system: drones, cortex, retention, backends |
-| `pip install "hive-memory[harness]"` | + HiveBench Studio (FastAPI sidecar) |
-| `pip install "hive-memory[bench]"` | + the evaluation suite (pytest, ST trainer) |
-
-`requirements.txt` / `requirements-dev.txt` remain the full pinned manifest.
-
 ## Use the system in your own project
 
-`hive/` is self-contained — it never imports from the bench or the harness:
+`hive/` is self-contained; it never imports from the bench or the harness:
 
 ```python
 from hive import Hive, HiveConfig, UltraSmallDrone, LMStudioBackend
@@ -176,17 +216,11 @@ print(result.reply)
 
 ## Run the studio (HiveBench Studio)
 
-One guided setup, then one command:
-
-```powershell
-.\.venv\Scripts\python -m harness --setup   # creates config, checks backend
-.\.venv\Scripts\python -m harness           # starts http://127.0.0.1:8765
-```
-
-`--setup` copies `providers.example.json` → `providers.local.json` if missing,
-probes for a reachable backend (LM Studio on `:1234`, or auto-starts the local
+The two commands from [Quickstart](#quickstart) are the whole story: `--setup`
+copies `providers.example.json` → `providers.local.json` if missing, probes for
+a reachable backend (LM Studio on `:1234`, or auto-starts the local
 `llama-server` from `models/gguf`), and prints the next step. The studio serves
-the hive over a FastAPI API — the endpoint contract lives in
+the hive over a FastAPI API, the endpoint contract lives in
 `harness/harness/app.py`, and `docs/INTEGRATE.md` shows how to point external
 clients at it.
 
@@ -215,7 +249,7 @@ See `docs/INSTALL.md` for the full setup and run guide, and
 
 ## Documentation
 
-- **`docs/INSTALL.md`** — full-stack install guide (system + benchmark + studio, fresh machine)
-- **`docs/INTEGRATE.md`** — using hive-memory inside OpenCode, dsh, or your own harness
-- **`HIVE-WHITE-PAPER.md`** — the theory: postulates, falsifiable predictions P1–P11 with measured verdicts (§8), the PES metric (§6), KV-compression landscape (§1.6), threats & limitations (§9)
-- **`HIVE-DIAGRAMS.md`** — visuals and measured charts
+- **`docs/INSTALL.md`**, full-stack install guide (system + benchmark + studio, fresh machine)
+- **`docs/INTEGRATE.md`**, using hive-memory inside OpenCode, dsh, or your own harness
+- **`HIVE-WHITE-PAPER.md`**, the theory: postulates, falsifiable predictions P1-P11 with measured verdicts (§8), the PES metric (§6), KV-compression landscape (§1.6), threats & limitations (§9)
+- **`HIVE-DIAGRAMS.md`**, visuals and measured charts
