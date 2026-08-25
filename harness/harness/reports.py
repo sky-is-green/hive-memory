@@ -252,16 +252,30 @@ def render_runs_page(entries: list[dict]) -> str:
 
 _SERVER_CSS = _CSS + """
  /* console overrides: full-bleed three-pane layout */
- body { max-width: none; margin: 0; padding: 1.2rem 1.6rem; }
- h1 { margin: 0 0 1rem 0; }
+ body { max-width: none; margin: 0; padding: .8rem 1.2rem;
+        height: 100vh; box-sizing: border-box;
+        display: flex; flex-direction: column; overflow: hidden; }
+ h1 { margin: 0 0 .7rem 0; flex: none; }
  section { background: #fff; border-radius: 8px; padding: 1rem 1.4rem;
-          margin: 0 0 1rem 0; box-shadow: 0 1px 3px rgba(16,32,48,.08); }
+           margin: 0 0 1rem 0; box-shadow: 0 1px 3px rgba(16,32,48,.08); }
  .grid { display: grid;
          grid-template-columns: minmax(320px, 1fr) minmax(420px, 1.3fr)
                                 minmax(340px, 1fr);
-         gap: 1rem; align-items: start; }
- @media (max-width: 1150px) { .grid { grid-template-columns: 1fr; } }
- .col { min-width: 0; }
+         gap: 1rem; align-items: stretch;
+         flex: 1 1 auto; min-height: 0; }
+ @media (max-width: 1150px) {
+    /* stacked layout: the page scrolls again and the chat pane keeps the
+       lion's share of the height instead of being squeezed into a sliver */
+    body { overflow-y: auto; }
+    .grid { display: flex; flex-direction: column; }
+    .col { overflow: visible; }
+    .mid { min-height: 75vh; overflow: visible; }
+    .chatpane .chatlog { min-height: 50vh; } }
+ .col { min-width: 0; min-height: 0; overflow-y: auto; padding-bottom: 1rem; }
+ /* the chat column never scrolls itself: its pane fills the exact space */
+ .mid { overflow: hidden; display: flex; flex-direction: column;
+        padding-bottom: 0; }
+ .mid .chatpane { margin-bottom: 0; }
  input, button, select { font: inherit; padding: .35rem .6rem;
         margin: .15rem .3rem .15rem 0; }
  button { cursor: pointer; }
@@ -335,9 +349,58 @@ _SERVER_CSS = _CSS + """
    transition: opacity .12s ease .18s, transform .12s ease .18s;
    pointer-events: none;
    box-shadow: 0 4px 14px rgba(0, 0, 0, .28); }
- .hint:hover::after, .hint:focus::after {
-   opacity: 1; visibility: visible; transform: none; }
-"""
+  .hint:hover::after, .hint:focus::after {
+    opacity: 1; visibility: visible; transform: none; }
+ /* chat pane fills its column; the composer rides the bottom edge */
+ .chatpane .chatlog { flex: 1 1 auto; height: auto; min-height: 220px;
+                      margin-bottom: .5rem; }
+ .composer { margin-top: auto; }
+ /* OpenCode-style session tabs */
+ .sesstabs { display: flex; gap: .3rem; flex-wrap: wrap; margin: 0 0 .5rem; }
+ .sesstab { border: 1px solid #cfd8e0; background: #eef2f6;
+            border-radius: 6px; padding: .18rem .55rem; font-size: .84rem;
+            cursor: pointer; display: inline-flex; align-items: center;
+            gap: .45rem; max-width: 15rem; }
+ .sesstab .name { overflow: hidden; text-overflow: ellipsis;
+                  white-space: nowrap; }
+ .sesstab.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+ .sesstab.unsaved .name::after { content: " •"; opacity: .7; }
+ .sesstab .x { opacity: .55; font-weight: 700; padding: 0 .1rem; }
+ .sesstab .x:hover { opacity: 1; }
+ /* persistent agent tool steps (collapsible, stay in the transcript) */
+ .toolstep { align-self: flex-start; max-width: 85%; background: #fff;
+             border: 1px dashed #cfd8e0; border-radius: 8px;
+             font-size: .82rem; }
+ .toolstep summary { padding: .3rem .6rem; cursor: pointer; color: #456; }
+ .toolstep pre { margin: .35rem .6rem; max-height: 180px; background: #f7fafc; }
+ /* ---- HiveBench palette --------------------------------------------
+    black canvas · amber containers · black text inside containers ·
+    yellow text outside containers · red-orange borders --------------- */
+ body { background: #000000; color: #FFDD00; }
+ h1 { color: #FFDD00; }
+ section { background: #FFB703; border: 2.4px solid #FB8500; color: #000000;
+           box-shadow: 0 1px 6px rgba(251,133,0,.22); }
+ section h2 { color: #000000; }
+ section .note, section label.inline, section summary { color: rgba(0,0,0,.72); }
+ section b { color: #000000; }
+ input, select, textarea { background: #ffffff; color: #000000;
+        border: 1.2px solid #FB8500; border-radius: 4px; }
+ button { background: #ffffff; color: #000000;
+          border: 1.2px solid #FB8500; border-radius: 4px; }
+ button:hover:not(:disabled) { background: #ffedd1; }
+ #stopbtn { background: #b3372c; color: #fff; border: none; }
+ pre { background: #fff8ec; color: #000000; border: 1.2px solid #FB8500; }
+ .chatlog { background: #fffdf7; border: 1.2px solid #FB8500; }
+ .msg.user { background: #000000; color: #FFDD00; }
+ .msg.ai { background: #ffffff; border: 1.2px solid #FB8500; }
+ .msg.sys { background: rgba(0,0,0,.08); color: #000000; }
+ .tab { border-color: #FB8500; border-width: 1.2px; background: #ffe9c8; color: #000; }
+ .tab.active { background: #ffffff; border-bottom-color: #ffffff; }
+ .sesstab { border-color: #FB8500; border-width: 1.2px; background: #ffe9c8; color: #000; }
+ .sesstab.active { background: #000000; border-color: #000000; color: #FFDD00; }
+ .hint { background: #ffffff; color: #553300; border-color: #7a4a00; }
+ .toolstep { background: #ffffff; border: 1.2px dashed #FB8500; }
+ """
 
 
 def tip(text: str) -> str:
@@ -399,6 +462,7 @@ def render_server_page() -> str:
 </div>
 </details>
 <pre id="status">loading…</pre>
+<div id="instances"></div>
 <pre id="srvlog" title="llama_server.log tail">log: loading…</pre>
 </section>
 
@@ -506,23 +570,25 @@ providers.local.json (gitignored).</div>
 </div>
 
 <!-- ==================== MIDDLE: loaded AI chat ==================== -->
-<div class="col">
-<section style="display:flex; flex-direction:column;">
+<div class="col mid">
+<section class="chatpane" style="display:flex; flex-direction:column; flex:1 1 auto; min-height:0;">
+<div id="sess-tabs" class="sesstabs"></div>
 <div class="row" style="display:flex; justify-content:space-between; align-items:center;">
 <h2 style="margin:0" id="chat-title">Loaded model</h2>
 <div>
 <span class="modesel">
-<label class="inline"><input type="radio" name="chatmode" value="hive" checked> Hive {tip('Curated generation: the hive assembles the context, then generates directly.')}</label>
-<label class="inline"><input type="radio" name="chatmode" value="agent"> Agent (dsh) {tip('The full DeepSeek Harness agent loop — tools, multi-step turns, session log — on the loaded model.')}</label>
+<label class="inline">model <select id="chat-provider" onchange="saveConvProvider(this.value)" title="Inference target for this conversation"></select></label>
+<label class="inline"><input type="radio" name="chatmode" value="hive" checked> Hive {tip('Curated generation: the hive assembles the context, then generates directly.')} </label>
+<label class="inline"><input type="radio" name="chatmode" value="agent"> Agent (dsh) {tip('The full DeepSeek Harness agent loop — tools, multi-step turns, session log — pointed at the loaded model.')}</label>
 </span>
-<button onclick="newConversation()">New conversation</button></div>
+<button onclick="newConversation()">{tip('Opens a fresh session tab; the current one stays in the tab strip.')}New conversation</button></div>
 <div id="chatlog" class="chatlog"></div>
-<div class="row" style="display:flex; gap:.4rem;">
+<div class="row composer" style="display:flex; gap:.4rem;">
 <span class="sugwrap" style="flex:1; display:flex;"><input id="chatin" placeholder="Talk to the loaded AI…  (/ for commands)" style="flex:1;"
        onkeydown="if (event.key === 'Enter') chatSubmit()" autocomplete="off">
 <div class="sugbox" id="sug-chat"></div></span>
 <button id="sendbtn" onclick="chatSubmit()">Send</button>
-<button id="stopbtn" style="display:none" onclick="cancelAgent()">Stop</button></div>
+<button id="stopbtn" style="display:none" onclick="cancelAgent()">Stop</button><button id="savebtn" onclick="saveSession()">Save session</button>{tip('Name and keep this session as a tab. Tabs and transcripts survive page reloads.')}</div>
 <div class="note"><b>Hive</b>: direct curated generation. <b>Agent (dsh)</b>:
 the full DeepSeek Harness agent loop — bash/files/code tools, multi-step
 turns, durable session log — pointed at the loaded model.</div>
@@ -669,6 +735,90 @@ for (const id of ['q', 'drepo', 'hfrepo']) {{
 }}
 document.getElementById('model').addEventListener('focus', suggestLocal);
 
+/* --------------------- sessions (OpenCode-style tabs) ----------------- */
+const SESS_KEY = 'hive-console-sessions';
+let sessions = {{}};
+try {{ sessions = JSON.parse(localStorage.getItem(SESS_KEY) || '{{}}') || {{}}; }}
+catch (e) {{ sessions = {{}}; }}
+function persistSessions() {{
+  localStorage.setItem(SESS_KEY, JSON.stringify(sessions));
+}}
+function ensureSession(id) {{
+  if (!sessions[id]) sessions[id] = {{ title: null, updated: Date.now(), transcript: [] }};
+  return sessions[id];
+}}
+function record(role, text, meta) {{
+  const s = ensureSession(convId);
+  s.transcript.push({{role: role, text: text, meta: meta || null}});
+  if (s.transcript.length > 400) s.transcript.splice(0, s.transcript.length - 400);
+  s.updated = Date.now();
+  persistSessions();
+}}
+function restoreTranscript(id) {{
+  const log = document.getElementById('chatlog');
+  log.innerHTML = '';
+  const s = sessions[id];
+  if (!s) return;
+  for (const m of s.transcript) {{
+    if (m.role === 'tool') continue;   // tool steps are agent-run noise on replay
+    bubble(m.role, m.text, m.meta);
+  }}
+}}
+function tabLabel(id) {{
+  const s = sessions[id];
+  return (s && s.title) ? s.title : 'Session ' + id.slice(-5);
+}}
+function renderTabs() {{
+  const wrap = document.getElementById('sess-tabs');
+  wrap.innerHTML = '';
+  const ids = Object.keys(sessions).sort((a, b) =>
+    (sessions[b].updated || 0) - (sessions[a].updated || 0));
+  for (const id of ids) {{
+    const t = document.createElement('span');
+    t.className = 'sesstab' + (id === convId ? ' active' : '')
+      + (sessions[id].title ? '' : ' unsaved');
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = tabLabel(id);
+    t.appendChild(name);
+    const x = document.createElement('span');
+    x.className = 'x';
+    x.textContent = '\\u00d7';
+    x.title = 'Close session';
+    x.addEventListener('click', ev => {{ ev.stopPropagation(); closeSession(id); }});
+    t.appendChild(x);
+    t.addEventListener('click', () => switchSession(id));
+    wrap.appendChild(t);
+  }}
+}}
+async function switchSession(id) {{
+  if (id === convId) return;
+  convId = id;
+  localStorage.setItem('hive-console-conv', convId);
+  restoreTranscript(id);
+  renderTabs();
+  try {{ await api('/v1/hive/state?conversation_id=' + encodeURIComponent(id)); }} catch (e) {{}}
+}}
+function closeSession(id) {{
+  delete sessions[id];
+  persistSessions();
+  api('/v1/hive/reset', 'POST', {{conversation_id: id}}).catch(() => {{}});
+  if (id !== convId) {{ renderTabs(); return; }}
+  const rest = Object.keys(sessions).sort((a, b) =>
+    (sessions[b].updated || 0) - (sessions[a].updated || 0));
+  if (rest.length) switchSession(rest[0]);
+  else newConversation();
+}}
+function saveSession() {{
+  const cur = ensureSession(convId);
+  const name = prompt('Name this session:', cur.title || '');
+  if (name === null) return;
+  cur.title = name.trim() || ('Session ' + new Date().toLocaleString());
+  cur.updated = Date.now();
+  persistSessions();
+  renderTabs();
+}}
+
 /* ------------------------------ chat -------------------------------- */
 function bubble(role, text, meta) {{
   const log = document.getElementById('chatlog');
@@ -715,13 +865,18 @@ function chatSubmit() {{
 
 async function runCommand(line) {{
   bubble('user', line);
+  record('user', line);
   try {{
     const r = await api('/v1/commands/run', 'POST',
                         {{line: line, conversation_id: convId}});
     bubble('sys', (r.kind === 'error' ? '⚠ ' : '') + (r.text || r.kind));
+    record('sys', (r.kind === 'error' ? '⚠ ' : '') + (r.text || r.kind));
     if (r.new_conversation_id) {{
       convId = r.new_conversation_id;
       localStorage.setItem('hive-console-conv', convId);
+      ensureSession(convId);
+      persistSessions();
+      renderTabs();
       document.getElementById('chatlog').innerHTML = '';
     }}
     if (r.mode) {{
@@ -770,8 +925,11 @@ async function sendChat() {{
   input.value = '';
   if (chatMode() === 'agent') return sendAgent(query);
   bubble('user', query);
+  record('user', query);
   const ai = bubble('ai', '…');
   const body = {{query: query, conversation_id: convId}};
+  const provSel = document.getElementById('chat-provider').value;
+  if (provSel) body.provider = provSel;
   if (Object.keys(hiveOverrides).length) body.config = hiveOverrides;
   let text = '';
   let turn = '?';
@@ -815,8 +973,10 @@ async function sendChat() {{
     m.className = 'meta';
     m.textContent = metaText;
     ai.appendChild(m);
+    record('ai', text || '(empty reply)', metaText);
   }} catch (e) {{
     ai.textContent = 'request failed: ' + e.message;
+    record('ai', 'request failed: ' + e.message);
   }}
 }}
 
@@ -831,6 +991,7 @@ async function cancelAgent() {{
 
 async function sendAgent(query) {{
   bubble('user', query);
+  record('user', query);
   bubble('sys', 'dsh agent starting…');
   const ai = bubble('ai', '');
   setBusy(true);
@@ -861,7 +1022,19 @@ async function sendAgent(query) {{
           ai.textContent = text;
           log_scroll();
         }} else if (ev.type === 'tool') {{
-          bubble('sys', `tool ${{ev.phase}}: ${{ev.tool}}`);
+          /* persistent collapsible step: stays in the transcript so a long
+             agent run reads like dsh's own tool view instead of toasts */
+          const det = document.createElement('details');
+          det.className = 'toolstep';
+          const sum = document.createElement('summary');
+          sum.textContent = (ev.phase === 'end' ? '\\u2713 ' : '\\u25b6 ')
+            + ev.tool;
+          det.appendChild(sum);
+          const pre = document.createElement('pre');
+          pre.textContent = JSON.stringify(ev, null, 1).slice(0, 2000);
+          det.appendChild(pre);
+          document.getElementById('chatlog').appendChild(det);
+          record('tool', ev.phase + ': ' + ev.tool);
           log_scroll();
         }} else if (ev.type === 'lifecycle') {{
           /* turn/step boundaries stay quiet */
@@ -882,8 +1055,10 @@ async function sendAgent(query) {{
     m.className = 'meta';
     m.textContent = 'dsh agent · ' + finish;
     ai.appendChild(m);
+    record('ai', text || '(no response)', 'dsh agent · ' + finish);
   }} catch (e) {{
     ai.textContent = 'agent request failed: ' + e.message;
+    record('ai', 'agent request failed: ' + e.message);
   }} finally {{
     setBusy(false);
   }}
@@ -893,13 +1068,25 @@ function log_scroll() {{
   log.scrollTop = log.scrollHeight;
 }}
 
-async function newConversation() {{
-  try {{ await api('/v1/hive/reset', 'POST', {{conversation_id: convId}}); }} catch (e) {{}}
+function newConversation() {{
+  /* OpenCode semantics: the current session keeps its tab; this opens a
+     fresh conversation id and a fresh (empty) tab beside it. */
+  convId = 'console-' + crypto.randomUUID().slice(0, 8);
+  localStorage.setItem('hive-console-conv', convId);
+  ensureSession(convId);
+  persistSessions();
   document.getElementById('chatlog').innerHTML = '';
-  bubble('ai', 'Fresh conversation — the store was reset.'
+  bubble('ai', 'Fresh session started.'
     + (Object.keys(hiveOverrides).length
        ? ' Hive overrides apply from the next message.' : ''));
+  renderTabs();
 }}
+
+/* boot: rebuild the tab strip and the last session's transcript */
+ensureSession(convId);
+persistSessions();
+renderTabs();
+restoreTranscript(convId);
 
 /* --------------------------- server panel ---------------------------- */
 function launchBody() {{
@@ -1218,12 +1405,55 @@ async function refresh() {{
     show('status', s);
     const title = document.getElementById('chat-title');
     if (s.running && s.healthy) {{
-      title.textContent = 'Loaded: ' + (s.model || 'model');
+      title.textContent = s.instances.length > 1
+        ? `${{s.instances.length}} models loaded`
+        : 'Loaded: ' + (s.model || 'model');
       title.className = 'ok';
     }} else {{
       title.textContent = s.running ? 'Loading…' : 'No model loaded';
       title.className = 'bad';
     }}
+    // Loaded-instance cards: per-model unload, port shown.
+    const wrap = document.getElementById('instances');
+    wrap.innerHTML = '';
+    for (const inst of s.instances || []) {{
+      const row = document.createElement('div');
+      row.className = 'librow' + (inst.healthy ? ' loaded' : '');
+      const label = document.createElement('span');
+      label.textContent = `${{inst.key}} — port ${{inst.port}}`
+        + `${{inst.adopted ? ' (adopted)' : ''}}`;
+      const unload = document.createElement('button');
+      unload.textContent = 'unload';
+      unload.title = 'stop this model server';
+      unload.addEventListener('click', async () => {{
+        if (!confirm('Unload ' + inst.key + '?')) return;
+        try {{
+          await api('/v1/server/unload', 'POST', {{key: inst.key}});
+          refresh();
+        }} catch (e) {{ alert(String(e)); }}
+      }});
+      row.appendChild(label);
+      row.appendChild(unload);
+      wrap.appendChild(row);
+    }}
+    // Chat model picker: every loaded instance's provider + remote providers.
+    api('/v1/provider/config').then(pc => {{
+      const sel = document.getElementById('chat-provider');
+      const current = sel.value;
+      sel.innerHTML = '';
+      const locals = (s.instances || []).map(i => 'local-' + i.key);
+      for (const p of pc.providers) {{
+        if (!locals.includes(p.name) && p.name.startsWith('local-')) continue;
+        const o = document.createElement('option');
+        o.value = p.name;
+        o.textContent = p.name + (p.model ? ' — ' + p.model.split('\\\\').pop().split('/').pop() : '');
+        sel.appendChild(o);
+      }}
+      sel.value = pc.default && locals.concat(
+        pc.providers.filter(p => !p.name.startsWith('local-')).map(p => p.name)
+      ).includes(pc.default) ? pc.default : (sel.firstElementChild ? sel.firstElementChild.value : '');
+      if (current && [...sel.options].some(o => o.value === current)) sel.value = current;
+    }}).catch(() => {{}});
   }}).catch(e => show('status', String(e)));
   api('/v1/server/log?tail=30').then(l => {{
     if (l.lines.length) show('srvlog', l.lines.join('\\n'));

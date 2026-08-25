@@ -1,9 +1,10 @@
 """Local llama.cpp server management + Hugging Face model acquisition.
 
-Owns the "load models in our own app" layer (HARNESS-SPEC M4):
+Owns the "load models in our own app" layer (HARNESS-SPEC M4), LM-Studio
+style: **multiple models can be loaded at once**, each as its own
+``llama-server`` process on its own port, independently unloadable, every
+one registered as a provider so chat/agent/benchmarks can target it by name.
 
-- ``LlamaServerManager`` spawns/stops one ``llama-server`` subprocess
-  (OpenAI-compatible, Vulkan build for AMD GPUs) and health-checks it.
 - Discovery is **live**: hub search and repo file listings hit the public
   Hugging Face API per request, so newly released models appear immediately —
   nothing model-specific is hardcoded here. Managed downloads run in
@@ -24,6 +25,7 @@ import socket
 import subprocess
 import threading
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -68,28 +70,6 @@ def _hf_download(repo_id: str, filename: str, dest_dir: Path,
         repo_id=repo_id, filename=filename, local_dir=str(dest_dir),
         token=token or os.environ.get("HF_TOKEN") or None,
     ))
-
-
-class DownloadJob:
-    """Status record for one managed HF file download."""
-
-    def __init__(self, key: str, repo: str, filename: str) -> None:
-        self.key = key
-        self.repo = repo
-        self.filename = filename
-        self.state = "queued"  # queued | downloading | done | error
-        self.error = ""
-        self.path: Optional[str] = None
-        self.started_at = time.time()
-        self.finished_at: Optional[float] = None
-
-    def to_dict(self) -> dict:
-        return {
-            "key": self.key, "repo": self.repo, "filename": self.filename,
-            "state": self.state, "error": self.error, "path": self.path,
-            "elapsed_s": round((self.finished_at or time.time())
-                               - self.started_at, 1),
-        }
 
 
 def _port_in_use(host: str, port: int, timeout: float = 1.0) -> bool:
@@ -167,8 +147,60 @@ def launch_extra_args(load_options: dict) -> list[str]:
     return args
 
 
+@dataclass
+class ServerInstance:
+    """One loaded model: its llama-server process, port, and identity."""
+
+    key: str
+    port: int
+    model: str
+    pid: Optional[int] = None
+    adopted: bool = False
+    started_at: str = ""
+    proc: object = field(default=None, repr=False, compare=False)
+
+    def to_dict(self) -> dict:
+        return {
+            "key": self.key,
+            "running": True,
+            "healthy": True,
+            "port": self.port,
+            "base_url": f"http://127.0.0.1:{self.port}",
+            "model": self.model,
+            "pid": self.pid,
+            "adopted": self.adopted,
+            "started_at": self.started_at,
+        }
+
+
+class DownloadJob:
+    """Status record for one managed HF file download."""
+
+    def __init__(self, key: str, repo: str, filename: str) -> None:
+        self.key = key
+        self.repo = repo
+        self.filename = filename
+        self.state = "queued"  # queued | downloading | done | error
+        self.error = ""
+        self.path: Optional[str] = None
+        self.started_at = time.time()
+        self.finished_at: Optional[float] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "key": self.key, "repo": self.repo, "filename": self.filename,
+            "state": self.state, "error": self.error, "path": self.path,
+            "elapsed_s": round((self.finished_at or time.time())
+                               - self.started_at, 1),
+        }
+
+
 class LlamaServerManager:
-    """One llama-server process, its downloads, and the local model library."""
+    """Multi-model llama-server fleet, downloads, and the local library.
+
+    Each ``load()`` spawns (or adopts) one llama-server on its own port and
+    registers it under a unique key; ``unload(key)`` stops exactly that one.
+    """
 
     def __init__(
         self,
@@ -191,14 +223,25 @@ class LlamaServerManager:
         self.spawner = spawner
         self.prober = prober or _probe
         self.startup_timeout = startup_timeout
-        self._lock = threading.Lock()
-        self._proc = None
-        self._meta: dict = {}
+        self._lock = threading.RLock()
+        self._instances: dict[str, ServerInstance] = {}
         self._downloads: dict[str, DownloadJob] = {}
 
     # ------------------------------------------------------------------
     # local library
     # ------------------------------------------------------------------
+    def server_log(self, tail: int = 120) -> list[str]:
+        """Last lines of the llama-server output (startup errors land here).
+
+        Logs are per-port (``llama_server_<port>.log``); the most recently
+        written file wins."""
+        candidates = sorted(self.log_dir.glob("llama_server*.log"),
+                            key=lambda p: p.stat().st_mtime, reverse=True)
+        if not candidates:
+            return []
+        text = candidates[0].read_text(encoding="utf-8", errors="replace")
+        return text.splitlines()[-max(1, tail):]
+
     def list_local(self) -> list[dict]:
         entries = []
         for p in sorted(self.models_dir.rglob("*.gguf")):
@@ -227,70 +270,110 @@ class LlamaServerManager:
     # ------------------------------------------------------------------
     # lifecycle
     # ------------------------------------------------------------------
+    def _instance_alive(self, inst: ServerInstance) -> bool:
+        if inst.adopted:
+            return True
+        return inst.proc is not None and inst.proc.poll() is None
+
+    def _probe_instance(self, inst: ServerInstance) -> object:
+        try:
+            return self.prober(f"http://{self.host}:{inst.port}")
+        except Exception:  # noqa: BLE001 - a dead instance probes False
+            return False
+
+    def _prune_dead(self) -> None:
+        for key in list(self._instances):
+            inst = self._instances[key]
+            if not self._instance_alive(inst):
+                del self._instances[key]
+
+    def _free_port(self, preferred: Optional[int] = None) -> int:
+        """First free port at/below-or-after ``preferred`` (our own loaded
+        instances' ports are busy by definition, so they are skipped)."""
+        port = preferred if preferred is not None else self.port
+        for _ in range(64):
+            if not _port_in_use(self.host, port):
+                return port
+            port += 1
+        raise RuntimeError("no free port found in the llama-server range")
+
+    def _unique_key(self, base: str) -> str:
+        key = base
+        n = 2
+        while key in self._instances:
+            key = f"{base}-{n}"
+            n += 1
+        return key
+
     def status(self) -> dict:
         with self._lock:
-            meta = dict(self._meta)
-            proc_alive = self._proc is not None and self._proc.poll() is None
-        running = bool(meta.get("running")) and (proc_alive or meta.get("adopted"))
-        info = {
-            "running": running,
-            "adopted": bool(meta.get("adopted")),
+            self._prune_dead()
+            instances = [i.to_dict() for i in
+                         sorted(self._instances.values(), key=lambda i: i.key)]
+        for inst_dict in instances:
+            inst = self._instances[inst_dict["key"]]
+            probe = self._probe_instance(inst)
+            inst_dict["healthy"] = bool(probe)
+            if probe and probe is not True:
+                inst_dict["model"] = probe
+        primary = instances[0] if instances else None
+        return {
+            "running": bool(instances),
+            "healthy": bool(instances) and all(i["healthy"] for i in instances),
             "binary": str(self.binary),
             "binary_found": self.binary.is_file(),
-            "port": meta.get("port", self.port),
-            "base_url": f"http://{self.host}:{meta.get('port', self.port)}",
-            "model": meta.get("model"),
-            "pid": meta.get("pid"),
-            "started_at": meta.get("started_at"),
+            "port": primary["port"] if primary else self.port,
+            "base_url": primary["base_url"] if primary
+            else f"http://{self.host}:{self.port}",
+            "model": primary["model"] if primary else None,
+            "pid": primary["pid"] if primary else None,
+            "started_at": primary["started_at"] if primary else None,
+            "instances": instances,
             "local_models": self.list_local(),
-            "downloads": [j.to_dict() for j in self._downloads.values()],
+            "downloads": self.downloads_status(),
         }
-        if running:
-            probe = self.prober(info["base_url"])
-            info["healthy"] = bool(probe)
-            if probe and probe is not True:
-                info["model"] = probe
-            if not info["healthy"] and meta.get("adopted"):
-                # an adopted server that stopped answering is gone
-                info["running"] = False
-        else:
-            info["healthy"] = False
-        return info
 
-    def start(
+    def load(
         self,
         model: Optional[str] = None,
         hf_repo: Optional[str] = None,
         hf_file: Optional[str] = None,
+        key: Optional[str] = None,
         port: Optional[int] = None,
         ctx_size: int = 8192,
         ngl: int = 999,
         extra_args: Optional[list[str]] = None,
     ) -> dict:
-        """Start llama-server. Priority: local ``model`` > --hf-repo/--hf-file
-        passthrough (llama-server downloads into the shared HF cache)."""
+        """Load one model as its own llama-server instance. Priority: local
+        ``model`` > --hf-repo/--hf-file passthrough. Loading the same model
+        twice is rejected; different models coexist on different ports."""
         if not self.binary.is_file():
             raise RuntimeError(
                 f"llama-server not found at {self.binary}. Set HARNESS_LLAMA_SERVER "
                 "or extract a llama.cpp Vulkan release into tools/llama.cpp/."
             )
-        with self._lock:
-            if self._proc is not None and self._proc.poll() is None:
-                raise RuntimeError(
-                    f"already running on port {self._meta.get('port', self.port)}; "
-                    "stop it first"
-                )
         resolved = self.resolve_model(model) if model else None
         if model and resolved is None and not (hf_repo and hf_file):
             raise RuntimeError(
                 f"model '{model}' is neither a local file nor paired with "
                 "--hf-repo/--hf-file; see GET /v1/models/local"
             )
-        use_port = int(port) if port else self.port
+        with self._lock:
+            self._prune_dead()
+            if resolved is not None:
+                for inst in self._instances.values():
+                    if inst.model in (resolved.name, resolved.stem, str(resolved)):
+                        raise RuntimeError(
+                            f"'{resolved.name}' is already loaded "
+                            f"(instance '{inst.key}' on port {inst.port})"
+                        )
 
+        model_name = (resolved.name if resolved else (hf_file or "model"))
+        base_key = key or Path(model_name).stem or "model"
+        use_port = int(port) if port else self._free_port(self.port)
         # Pre-flight: something is already on this port. If it is a healthy
         # llama-server, ADOPT it (sidecar restarts must not orphan or fight
-        # their own server); anything else is refused loudly.
+        # their own servers); anything else is refused loudly.
         if _port_in_use(self.host, use_port):
             base_url = f"http://{self.host}:{use_port}"
             listener_pid = _pid_listening_on(use_port)
@@ -300,23 +383,21 @@ class LlamaServerManager:
             except Exception:  # noqa: BLE001 - a broken squatter is not ours
                 probe = False
             if probe and "llama" in listener_name.lower():
+                inst = ServerInstance(
+                    key=self._unique_key(base_key),
+                    port=use_port,
+                    model=(probe if probe is not True else model_name),
+                    pid=listener_pid,
+                    adopted=True,
+                    started_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+                )
                 with self._lock:
-                    self._proc = None
-                    self._meta = {
-                        "running": True,
-                        "adopted": True,
-                        "pid": listener_pid,
-                        "port": use_port,
-                        "model": (probe if probe is not True
-                                  else (resolved.name if resolved
-                                        else (hf_file or ""))),
-                        "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    }
-                return self.status()
+                    self._instances[inst.key] = inst
+                return inst.to_dict()
             raise RuntimeError(
                 f"port {use_port} is already serving"
                 + (f" (pid {listener_pid}: {listener_name})" if listener_pid else "")
-                + "; stop it or pass port=<free port>."
+                + "; stop that server or pick another port."
             )
 
         cmd = [str(self.binary)]
@@ -333,7 +414,7 @@ class LlamaServerManager:
         cmd += [str(a) for a in (extra_args or [])]
 
         self.log_dir.mkdir(parents=True, exist_ok=True)
-        log_path = self.log_dir / "llama_server.log"
+        log_path = self.log_dir / f"llama_server_{use_port}.log"
         log_handle = open(log_path, "ab")
         try:
             proc = self.spawner(cmd, stdout=log_handle, stderr=subprocess.STDOUT)
@@ -372,35 +453,52 @@ class LlamaServerManager:
                 f"{self.startup_timeout:.0f}s; see {log_path}"
             )
 
+        inst = ServerInstance(
+            key=self._unique_key(base_key),
+            port=use_port,
+            model=model_id or model_name,
+            pid=getattr(proc, "pid", None),
+            started_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+            proc=proc,
+        )
         with self._lock:
-            self._proc = proc
-            self._meta = {
-                "running": True,
-                "pid": getattr(proc, "pid", None),
-                "port": use_port,
-                "model": model_id or (resolved.name if resolved
-                                      else (hf_file or "")),
-                "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            }
-        return self.status()
+            self._instances[inst.key] = inst
+        return inst.to_dict()
 
-    def stop(self) -> dict:
+    def unload(self, key: str) -> dict:
         with self._lock:
-            proc, self._proc = self._proc, None
-            meta, self._meta = self._meta, {}
-        adopted_pid = meta.get("pid") if meta.get("adopted") else None
-        if proc is not None:
+            inst = self._instances.pop(key, None)
+        if inst is None:
+            raise RuntimeError(f"no such loaded instance: {key}")
+        if inst.proc is not None:
             try:
-                proc.terminate()
+                inst.proc.terminate()
                 try:
-                    proc.wait(timeout=10)
-                except Exception:  # noqa: BLE001 - force after grace period
-                    proc.kill()
+                    inst.proc.wait(timeout=10)
+                except Exception:  # noqa: BLE001
+                    inst.proc.kill()
             except Exception:  # noqa: BLE001 - already gone
                 pass
-        elif adopted_pid:
-            _terminate_pid(int(adopted_pid))
-        return {"ok": True}
+        elif inst.pid:
+            _terminate_pid(inst.pid)
+        return {"ok": True, "unloaded": key}
+
+    def stop_all(self) -> dict:
+        with self._lock:
+            keys = list(self._instances)
+        for key in keys:
+            try:
+                self.unload(key)
+            except RuntimeError:
+                pass
+        return {"ok": True, "stopped": len(keys)}
+
+    # Backward-compatible single-instance vocabulary -----------------------
+    def start(self, **kwargs) -> dict:
+        return self.load(**kwargs)
+
+    def stop(self) -> dict:
+        return self.stop_all()
 
     # ------------------------------------------------------------------
     # Hugging Face (live hub API — nothing cached/hardcoded)
@@ -443,16 +541,21 @@ class LlamaServerManager:
         return {"ok": True, "deleted": str(target)}
 
     def server_log(self, tail: int = 120) -> list[str]:
-        """Last lines of the llama-server log (startup errors live here)."""
-        path = self.log_dir / "llama_server.log"
-        if not path.is_file():
-            return []
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-        return lines[-max(1, tail):]
+        """Last lines of the llama-server logs (startup errors live here)."""
+        lines: list[str] = []
+        for path in sorted(self.log_dir.glob("llama_server*.log")):
+            lines += path.read_text(encoding="utf-8",
+                                    errors="replace").splitlines()[-max(1, tail):]
+        return lines
 
-    def server_metrics(self) -> dict:
+    def server_metrics(self, key: Optional[str] = None) -> dict:
         """Proxy llama-server's prometheus /metrics (kv usage, throughput)."""
-        base = f"http://{self.host}:{self._meta.get('port', self.port)}"
+        with self._lock:
+            inst = self._instances.get(key) if key else None
+            port = inst.port if inst else (
+                next(iter(self._instances.values())).port
+                if self._instances else self.port)
+        base = f"http://{self.host}:{port}"
         try:
             resp = requests.get(f"{base}/metrics", timeout=3)
         except requests.RequestException:
@@ -463,9 +566,9 @@ class LlamaServerManager:
         for line in resp.text.splitlines():
             if line.startswith("#") or " " not in line:
                 continue
-            key, _, value = line.partition(" ")
+            k, _, v = line.partition(" ")
             try:
-                gauges[key] = float(value)
+                gauges[k] = float(v)
             except ValueError:
                 continue
         return {"available": True, "gauges": gauges}

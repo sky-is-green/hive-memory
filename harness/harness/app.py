@@ -155,6 +155,7 @@ class _State:
         self._last_access: dict[str, float] = {}
         self._inflight: set[str] = set()
         self._loggers: dict[str, EventLogger] = {}
+        self._conv_provider: dict[str, str] = {}  # per-conversation override
 
     def ultra(self):
         if self._ultra is None:
@@ -320,6 +321,7 @@ class TurnRequest(BaseModel):
     query: str
     conversation_id: str = "default"
     model: Optional[str] = None  # override the provider's model for this turn's hive
+    provider: Optional[str] = None  # per-conversation inference target (multi-model)
     engine: Optional[str] = None  # engine profile name (sampling defaults apply)
     config: Optional[dict] = None  # HiveConfig overrides (applied on creation)
 
@@ -363,10 +365,12 @@ class ServerStartRequest(BaseModel):
     model: Optional[str] = None  # local library name or path
     hf_repo: Optional[str] = None  # passthrough to llama-server --hf-repo
     hf_file: Optional[str] = None
+    key: Optional[str] = None  # instance key (defaults to the model stem)
     port: Optional[int] = None
     ctx_size: int = 8192
     ngl: int = 999  # GPU layers (Vulkan build: all layers on the RX 7900 XT)
     register_provider: bool = True
+    claim_default: bool = True  # first load claims the default provider slot
     # extra llama-server launch flags (wired to the UI settings panel)
     threads: Optional[int] = None
     flash_attn: bool = False
@@ -429,6 +433,10 @@ class ServerStartRequest(BaseModel):
 class HubDownloadRequest(BaseModel):
     repo: str
     file: str
+
+
+class ServerUnloadRequest(BaseModel):
+    key: str
 
 
 class StreamTurnRequest(BaseModel):
@@ -505,8 +513,8 @@ def create_app(
     def _default_ultra():
         return UltraSmallDrone(confidence_mode="off")
 
-    def _default_backend(model: Optional[str]):
-        kw = backend_kwargs(st.registry.resolve(None))
+    def _default_backend(model: Optional[str], provider: Optional[str] = None):
+        kw = backend_kwargs(st.registry.resolve(provider))
         if model:
             kw["model"] = model
         return OpenAICompatBackend(**kw)
@@ -561,11 +569,18 @@ def create_app(
         if not query:
             raise HTTPException(422, "query must not be empty")
         hive = st.hive_for(req.conversation_id, req.config, engine=req.engine)
-        if req.model and isinstance(hive.backend, OpenAICompatBackend) \
-                and req.model != hive.backend.model:
-            new_backend = st.backend_factory(req.model)
+        # Per-conversation inference target: provider and/or model override
+        # swaps the conversation's backend (multi-model: pick any loaded one).
+        current_provider = st._conv_provider.get(req.conversation_id)
+        wants_backend = (req.provider and req.provider != current_provider) \
+            or (req.model and isinstance(hive.backend, OpenAICompatBackend)
+                and req.model != hive.backend.model)
+        if wants_backend and isinstance(hive.backend, OpenAICompatBackend):
+            new_backend = st.backend_factory(req.model, provider=req.provider)
             hive.backend = new_backend
             hive.cache = KVCacheManager(new_backend)
+            st._conv_provider[req.conversation_id] = req.provider \
+                or st.registry.default
         st.begin(req.conversation_id)
         with st.lock_for(req.conversation_id):
             result = hive.process_turn(req.query, conversation_id=req.conversation_id)
@@ -1145,45 +1160,64 @@ def create_app(
                                             port=llama_port)
     app.state.models = models_manager
 
+    def register_local_remove(key: str) -> None:
+        """Retire a local instance's provider + engine profile."""
+        prov_name = f"local-{key}"
+        st.registry.providers = [
+            p for p in st.registry.providers
+            if p.name.lower() != prov_name.lower()
+        ]
+        st.engines.engines = [
+            e for e in st.engines.engines if e.name.lower() != prov_name.lower()
+        ]
+
     def register_local(info: dict, load_options: Optional[dict] = None,
-                       api_key: Optional[str] = None) -> None:
-        """Point the app at a manager-started llama-server: provider `local`
-        + engine profile with the real launch options. Shared by the start
-        endpoint and CLI auto-start so both paths route identically."""
+                       api_key: Optional[str] = None,
+                       key: Optional[str] = None,
+                       claim_default: bool = True) -> str:
+        """Register one manager-loaded llama-server as provider
+        ``local-<key>`` + engine profile with the real launch options. Shared
+        by the start endpoint and CLI auto-start. Returns the provider name.
+        Multi-model: every loaded instance gets its own provider; the first
+        (or an explicitly re-loaded default) claims the default slot."""
         if not info.get("running"):
-            return
+            return ""
+        inst_key = key or "local"
+        prov_name = f"local-{inst_key}"
         base_url = f"http://{models_manager.host}:{info['port']}"
-        prov = Provider(name="local", base_url=base_url,
+        prov = Provider(name=prov_name, base_url=base_url,
                         api_key=api_key or "lm-studio",
                         model=str(info.get("model") or ""))
         st.registry.providers = [
-            p for p in st.registry.providers if p.name.lower() != "local"
+            p for p in st.registry.providers if p.name.lower() != prov_name.lower()
         ] + [prov]
-        # a managed launch IS the studio's brain: claim the default even if
-        # another provider was set (/provider switches it back explicitly)
-        st.registry.default = "local"
+        if claim_default:
+            # a managed launch IS the studio's brain: claim the default
+            # (the user explicitly loaded this model; /provider switches back)
+            st.registry.default = prov_name
         try:
             save_registry(st.registry, st.providers_file)
         except OSError as exc:
             print(f"harness: could not persist providers config ({exc})",
                   file=sys.stderr)
         profile = EngineProfile(
-            name="local", kind="llama_cpp", base_url=base_url,
+            name=prov_name, kind="llama_cpp", base_url=base_url,
             load_options=load_options
             or {"context": 8192, "gpu_layers": 999},
             capabilities=["streaming", "prefix_caching"],
         )
         st.engines.engines = [
-            e for e in st.engines.engines if e.name.lower() != "local"
+            e for e in st.engines.engines if e.name.lower() != prov_name.lower()
         ] + [profile]
-        if not st.engines.default:
-            st.engines.default = "local"
+        if not st.engines.default or st.engines.default.startswith("local"):
+            st.engines.default = prov_name
         # persist so CLI auto-start (and /model) reuse these launch settings
         try:
             save_engines(st.engines, st.engines_file)
         except OSError as exc:
             print(f"harness: could not persist engines config ({exc})",
                   file=sys.stderr)
+        return prov_name
 
     app.state.register_local = register_local
 
@@ -1293,29 +1327,70 @@ def create_app(
             raise HTTPException(400, str(exc))
 
     @app.post("/v1/server/stop")
-    def server_stop():
-        return models_manager.stop()
+    def server_stop(key: Optional[str] = Query(default=None)):
+        """Unload one instance (key) or the whole local fleet (no key)."""
+        if key:
+            try:
+                return models_manager.unload(key)
+            except RuntimeError as exc:
+                raise HTTPException(404, str(exc))
+        for inst in list(models_manager.status()["instances"]):
+            register_local_remove(inst["key"])
+        return models_manager.stop_all()
 
     @app.post("/v1/server/start")
     def server_start(req: ServerStartRequest):
         try:
-            info = models_manager.start(
+            info = models_manager.load(
                 model=req.model, hf_repo=req.hf_repo, hf_file=req.hf_file,
-                port=req.port, ctx_size=req.ctx_size, ngl=req.ngl,
-                extra_args=req.extra_args(),
+                key=req.key, port=req.port, ctx_size=req.ctx_size,
+                ngl=req.ngl, extra_args=req.extra_args(),
             )
         except RuntimeError as exc:
             message = str(exc)
             code = 502
-            if "already running" in message:
+            if "already loaded" in message or "already serving" in message:
                 code = 409
             elif "not found at" in message or "neither a local file" in message:
                 code = 400
             raise HTTPException(code, message)
+        prov_name = ""
         if req.register_provider:
-            register_local(info, load_options=req.load_options(),
-                           api_key=req.api_key)
-        return {**info, "provider_registered": bool(req.register_provider)}
+            prov_name = register_local(
+                info, load_options=req.load_options(), api_key=req.api_key,
+                key=info["key"], claim_default=bool(req.claim_default),
+            )
+            save_registry(st.registry, st.providers_file)
+        return {**info, "provider": prov_name,
+                "provider_registered": bool(req.register_provider)}
+
+    @app.post("/v1/server/unload")
+    def server_unload(req: ServerUnloadRequest):
+        """Unload one instance and retire its provider + engine profile."""
+        try:
+            result = models_manager.unload(req.key)
+        except RuntimeError as exc:
+            raise HTTPException(404, str(exc))
+        prov_name = f"local-{req.key}"
+        st.registry.providers = [
+            p for p in st.registry.providers
+            if p.name.lower() != prov_name.lower()
+        ]
+        if st.registry.default == prov_name:
+            st.registry.default = next(
+                (p.name for p in st.registry.providers), "")
+        st.engines.engines = [
+            e for e in st.engines.engines if e.name.lower() != prov_name.lower()
+        ]
+        if st.engines.default == prov_name:
+            st.engines.default = next(
+                (e.name for e in st.engines.engines), "")
+        try:
+            save_registry(st.registry, st.providers_file)
+            save_engines(st.engines, st.engines_file)
+        except OSError:
+            pass
+        return {**result, "provider": prov_name}
 
     @app.get("/v1/models/local")
     def local_models():

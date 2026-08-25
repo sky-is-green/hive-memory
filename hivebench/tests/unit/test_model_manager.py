@@ -1,8 +1,8 @@
-"""Unit tests for the model-management layer (HARNESS-SPEC M4).
+﻿"""Unit tests for the model-management layer (HARNESS-SPEC M4).
 
 All offline: the llama-server process is a fake spawned-command recorder, the
 health prober is injectable, and the HF download implementation is monkey-
-patched — no binary, GPU, or network needed.
+patched â€” no binary, GPU, or network needed.
 """
 
 import json
@@ -108,8 +108,7 @@ def test_start_refuses_unknown_model_without_hf_fallback(manager):
 
 
 def test_hf_passthrough_when_model_not_local(manager):
-    manager.start(hf_repo="unsloth/Qwen3.8-9B-GGUF",
-                  hf_file="Qwen3.8-9B-UD-Q4_K_M.gguf")
+    manager.start(hf_repo='unsloth/Qwen3.8-9B-GGUF', hf_file='Qwen3.8-9B-UD-Q4_K_M.gguf')
     cmd = manager._spawned["cmd"]
     assert "--hf-repo" in cmd and "unsloth/Qwen3.8-9B-GGUF" in cmd
     assert "--hf-file" in cmd and "Qwen3.8-9B-UD-Q4_K_M.gguf" in cmd
@@ -134,7 +133,8 @@ def test_launch_settings_reach_the_command_line(client, tmp_path):
         assert expected in cmd, expected
     # engine load_options record what was actually launched
     engines = {e["name"]: e for e in c.get("/v1/engines").json()["engines"]}
-    opts = engines["local"]["load_options"]
+    local_engines = [e for e in engines.values() if e["name"].startswith("local")]
+    opts = local_engines[0]["load_options"]
     assert opts["threads"] == 6 and opts["flash_attn"] is True
     assert opts["cache_type_k"] == "q8_0" and opts["parallel_slots"] == 2
     c.post("/v1/server/stop")
@@ -273,7 +273,9 @@ def test_api_key_reaches_command_and_provider(client, tmp_path):
     # provider carries the key (masked on read-back)
     provs = {p["name"]: p for p in
              c.get("/v1/provider/config").json()["providers"]}
-    assert provs["local"]["api_key"] == "***"
+    local_provs = [k for k in provs if k.startswith("local-")]
+    assert len(local_provs) == 1
+    assert provs[local_provs[0]]["api_key"] == "***"
     c.post("/v1/server/stop")
 
 
@@ -469,7 +471,7 @@ def test_double_start_rejected_while_running(manager):
     manager.start(model="m.gguf")
     with pytest.raises(RuntimeError) as exc:
         manager.start(model="m.gguf")
-    assert "already running" in str(exc.value)
+    assert "already loaded" in str(exc.value)
 
 
 def test_start_refuses_port_already_in_use(manager):
@@ -492,12 +494,17 @@ def test_start_adopts_orphaned_llama_server(manager, monkeypatch):
     """A sidecar restart must re-adopt its own healthy llama-server instead
     of refusing (the zombie-server bug class)."""
     (manager.models_dir / "m.gguf").write_bytes(b"x")
-    monkeypatch.setattr(models_module, "_port_in_use", lambda h, p, t=1.0: True)
+    blocker = socket.socket()
+    blocker.bind(("127.0.0.1", 0))
+    blocker.listen(1)
+    port = blocker.getsockname()[1]
+    blocker.close()
+    monkeypatch.setattr(models_module, "_port_in_use", lambda h, p, t=1.0: p == port)
     monkeypatch.setattr(models_module, "_pid_listening_on", lambda p: 999)
     monkeypatch.setattr(models_module, "_process_name", lambda p: "llama-server.exe")
     monkeypatch.setattr(manager, "prober", lambda url: "adopted-model")
 
-    info = manager.start(model="m.gguf")
+    info = manager.start(model="m.gguf", port=port)
     assert info["running"] is True and info["adopted"] is True
     assert info["pid"] == 999 and info["model"] == "adopted-model"
     assert "cmd" not in manager._spawned  # nothing new spawned
@@ -512,11 +519,16 @@ def test_start_adopts_orphaned_llama_server(manager, monkeypatch):
 
 def test_start_refuses_foreign_port_squatter(manager, monkeypatch):
     (manager.models_dir / "m.gguf").write_bytes(b"x")
-    monkeypatch.setattr(models_module, "_port_in_use", lambda h, p, t=1.0: True)
+    blocker = socket.socket()
+    blocker.bind(("127.0.0.1", 0))
+    blocker.listen(1)
+    port = blocker.getsockname()[1]
+    blocker.close()
+    monkeypatch.setattr(models_module, "_port_in_use", lambda h, p, t=1.0: p == port)
     monkeypatch.setattr(models_module, "_pid_listening_on", lambda p: 1234)
     monkeypatch.setattr(models_module, "_process_name", lambda p: "LM Studio.exe")
     with pytest.raises(RuntimeError) as exc:
-        manager.start(model="m.gguf")
+        manager.start(model="m.gguf", port=port)
     assert "LM Studio.exe" in str(exc.value)
 
 
@@ -636,7 +648,7 @@ def test_download_error_is_captured_not_raised(manager, monkeypatch):
 def client(tmp_path, monkeypatch, manager):
     monkeypatch.chdir(tmp_path)
 
-    def backend_factory(model=None):
+    def backend_factory(model=None, provider=None):
         return OpenAICompatBackend(
             base_url="http://mock", model=model or "mock-model",
             transport=MockTransport(latency_ms=0),
@@ -669,14 +681,19 @@ def test_server_endpoints_roundtrip(client, tmp_path):
     r = c.post("/v1/server/start", json={"model": "demo.gguf"}).json()
     assert r["running"] is True and r["provider_registered"] is True
 
-    # start registered provider 'local' + engine profile 'local'
+    # start registered provider 'local-<key>' + engine profile
     provs = {p["name"]: p for p in c.get("/v1/provider/config").json()["providers"]}
-    assert provs["local"]["base_url"].endswith(f":{app.state.models.port}")
+    local_provs = [k for k in provs if k.startswith("local-")]
+    assert len(local_provs) == 1
+    assert provs[local_provs[0]]["base_url"].endswith(
+        f":{app.state.models.port}"
+    )
     engines = c.get("/v1/engines").json()
     by_name = {e["name"]: e for e in engines["engines"]}
-    assert engines["default"] == "local"
-    assert by_name["local"]["kind"] == "llama_cpp"
-    assert by_name["local"]["load_options"]["gpu_layers"] == 999
+    local_engines = [e for e in engines["engines"] if e["name"].startswith("local")]
+    assert engines["default"].startswith("local")
+    assert local_engines[0]["kind"] == "llama_cpp"
+    assert local_engines[0]["load_options"]["gpu_layers"] == 999
 
     assert c.post("/v1/server/stop").json()["ok"]
 

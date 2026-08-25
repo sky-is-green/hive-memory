@@ -75,24 +75,27 @@ def _spawn_detached(child_argv: list[str], log_path: Path) -> int:
 
 
 def _stop(pidfile: Path) -> int:
-    """Kill the detached instance recorded by --detach, plus its managed
-    llama-server child (taskkill /T misses it once the parent detaches)."""
+    """Kill the detached instance recorded by --detach, plus every managed
+    llama-server child (taskkill /T misses them once the parent detaches)."""
     if not pidfile.exists():
         print(f"no running studio recorded ({pidfile})")
         return 0
     raw = pidfile.read_text().strip()
-    llama_pid = None
+    llama_pids: list[int] = []
     try:
-        record = json.loads(raw)  # {"pid": ..., "llama_pid": ...}
+        record = json.loads(raw)  # {"pid": ..., "llama_pids": [...]} (or legacy)
         pid = int(record["pid"])
-        llama_pid = record.get("llama_pid")
+        legacy = record.get("llama_pid")
+        if legacy:
+            llama_pids.append(int(legacy))
+        llama_pids += [int(p) for p in record.get("llama_pids", []) or []]
     except (ValueError, TypeError):
         pid = int(raw)
-    if llama_pid:
+    for llama_pid in llama_pids:
         try:
             import psutil
 
-            psutil.Process(int(llama_pid)).terminate()
+            psutil.Process(llama_pid).terminate()
         except Exception:  # noqa: BLE001 - already gone
             pass
     if sys.platform == "win32":
@@ -103,7 +106,7 @@ def _stop(pidfile: Path) -> int:
         import signal
         os.kill(pid, signal.SIGTERM)
     pidfile.unlink(missing_ok=True)
-    print(f"stopped studio (pid {pid})")
+    print(f"stopped studio (pid {pid}, {len(llama_pids)} model server(s))")
     return 0
 
 from backend.providers import providers_path
@@ -249,7 +252,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # Auto-start (or adopt) the local llama.cpp server when a model is
     # available, reusing the saved launch settings from the engine profile
-    # (--no-auto-start opts out). Mirrors POST /v1/server/start.
+    # (--no-auto-start opts out). Mirrors POST /v1/server/start. Adoption
+    # walks every llama-server port from --llama-port upward so orphans from
+    # a previous run are re-registered instead of fought.
     if not args.no_auto_start and not args.mock:
         manager = app.state.models
         try:
@@ -257,7 +262,7 @@ def main(argv: list[str] | None = None) -> int:
             port_busy = manager.status()["running"]
             if port_busy:
                 info = manager.start(model=None, port=args.llama_port)
-                app.state.register_local(info)
+                app.state.register_local(info, key=info["key"])
                 print(f"auto-start: adopted llama-server on port {info['port']}")
             elif local:
                 newest = local[0]["file"]
@@ -274,19 +279,21 @@ def main(argv: list[str] | None = None) -> int:
                     ngl=int(load_options.get("gpu_layers", 999)),
                     extra_args=launch_extra_args(load_options),
                 )
-                app.state.register_local(info, load_options=load_options)
+                app.state.register_local(info, load_options=load_options,
+                                         key=info["key"])
                 print(f"auto-start: serving http://{manager.host}:{info['port']} "
                       f"(model: {info.get('model')})")
         except Exception as exc:  # noqa: BLE001 - never block boot on this
             print(f"auto-start: skipped ({exc})")
 
-    # Detached instances record the managed server so --stop can take the
-    # whole stack down (taskkill /T cannot reach the grandchild).
+    # Detached instances record every managed server so --stop can take the
+    # whole stack down (taskkill /T cannot reach the grandchildren).
     if os.environ.get("HIVE_STUDIO_CHILD"):
         try:
-            llama_pid = app.state.models.status().get("pid")
+            llama_pids = [i["pid"] for i in
+                          app.state.models.status()["instances"] if i["pid"]]
             pidfile.write_text(json.dumps({"pid": os.getpid(),
-                                           "llama_pid": llama_pid}))
+                                           "llama_pids": llama_pids}))
         except Exception:  # noqa: BLE001 - pidfile is best-effort
             pass
 

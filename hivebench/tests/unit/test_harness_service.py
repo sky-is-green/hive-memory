@@ -1,4 +1,4 @@
-"""Unit tests for the harness FastAPI sidecar (HARNESS-SPEC §3.3).
+﻿"""Unit tests for the harness FastAPI sidecar (HARNESS-SPEC Â§3.3).
 
 All offline: fake drone + mock transport backend, tmp cwd / runs root, so no
 LM Studio or encoder download is needed. Exercises every M1 endpoint.
@@ -20,7 +20,7 @@ from harness.app import create_app
 def client(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)  # event logs land in tmp
 
-    def backend_factory(model=None):
+    def backend_factory(model=None, provider=None):
         return OpenAICompatBackend(
             base_url="http://mock", model=model or "mock-model",
             transport=MockTransport(latency_ms=0),
@@ -177,7 +177,7 @@ def test_openai_curated_context_feeds_next_turn(tmp_path, monkeypatch):
                 v[i] = 1.0
             return v
 
-    def backend_factory(model=None):
+    def backend_factory(model=None, provider=None):
         return OpenAICompatBackend(
             base_url="http://mock", model=model or "mock-model",
             transport=MockTransport(latency_ms=0),
@@ -552,7 +552,7 @@ def test_mock_chat_acknowledges_tool_result(client):
                                           "arguments": "{}"}}]},
             {"role": "tool", "tool_call_id": "call_1",
              "content": "Run protocol_x (completed)\n"
-                        "post-run PES 62.4 · per-turn PES - · turns 24\n"
+                        "post-run PES 62.4 Â· per-turn PES - Â· turns 24\n"
                         "P1 PASS | P2 SPLIT | P6 FAIL"},
         ],
     }).json()
@@ -615,7 +615,7 @@ def test_curate_full_flow_with_mock_llm_roundtrip(client):
 # conversation persistence across sidecar restarts
 # ---------------------------------------------------------------------------
 def _make_app(tmp_path):
-    def backend_factory(model=None):
+    def backend_factory(model=None, provider=None):
         return OpenAICompatBackend(
             base_url="http://mock", model=model or "mock-model",
             transport=MockTransport(latency_ms=0),
@@ -692,7 +692,7 @@ def test_conversation_filename_never_escapes_state_dir(tmp_path, monkeypatch):
 def test_disabled_persistence_writes_nothing(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
-    def backend_factory(model=None):
+    def backend_factory(model=None, provider=None):
         return OpenAICompatBackend(transport=MockTransport(latency_ms=0))
 
     app = create_app(
