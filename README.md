@@ -121,9 +121,6 @@ it does it deterministically, offline, and replayably:
   reframe, hedge poisoning) are documented in the paper's threats section
   (§9), not hidden.
 
-- Full offline test suite — no LLM calls needed to verify the pipeline;
-  deterministic, replayable evaluation for every claim (P1–P12)
-
 ## Repo layout
 
 | Path | Contents |
