@@ -1,6 +1,25 @@
-# Hive Memory: A Managed-Decay Context Curation Architecture for Long-Horizon LLM Conversations
+﻿# Hive Memory: A Managed-Decay Context Curation Architecture for Long-Horizon LLM Conversations
 
 **A white paper for the open-source LLM and testing community**
+
+---
+
+## Contents
+
+- [Abstract](#abstract)
+- [1. Introduction & Motivation](#1-introduction--motivation) · [1.1 The problem](#11-the-problem) · [1.2 The proposed remedy](#12-the-proposed-remedy) · [1.3 Scope of the evaluation](#13-the-scope-of-this-evaluation) · [1.4 Measured benefit](#14-the-user-visible-benefit-measured) · [1.5 Why it must be separate](#15-why-this-component-is-needed-why-it-affects-all-llm-usage-and-why-it-must-be-separate) · [1.6 KV-compression axes](#16-relationship-to-kv-compression--the-three-axes-turboquant-and-friends)
+- [2. Related Work](#2-related-work)
+- [3. Architectural Overview](#3-architectural-overview)
+- [4. Theoretical Foundations](#4-theoretical-foundations) · [Postulate 1 — context curation](#postulate-1--the-context-curation-postulate) · [Postulate 2 — managed decay](#postulate-2--the-managed-decay-postulate) · [Postulate 3 — separation](#postulate-3--the-separation-postulate) · [Postulate 4 — ground-truth bootstrap](#postulate-4--the-ground-truth-bootstrap-postulate)
+- [5. Hypotheses and Predictions](#5-hypotheses-and-predictions) · [P1 Constant throughput](#p1--constant-throughput-hypothesis) · [P2 Retrieval precision](#p2--retrieval-precision-hypothesis) · [P3 Context sufficiency](#p3--context-sufficiency-hypothesis) · [P4 Domain-dependent decay](#p4--domain-dependent-decay-curve) · [P5 Targeted masking](#p5--targeted-masking-hypothesis) · [P6 Confidence escalation](#p6--confidence-escalation-hypothesis) · [P7 Queen agreement](#p7--queen-agreement-hypothesis) · [P8 Heuristic-routing floor](#p8--heuristic-routing-floor-hypothesis) · [P9 Densest duplicate](#p9--densest-duplicate-hypothesis) · [P10 Drift reset](#p10--drift-reset-hypothesis) · [P11 Comb resurrection](#p11--comb-resurrection-hypothesis-pass-deterministically-2026-08-24-live-validation-completed-2026-08-24)
+- [6. The Pipeline Efficiency Score (PES)](#6-the-pipeline-efficiency-score-pes)
+- [7. Experimental Protocol (Reproducibility)](#7-experimental-protocol-reproducibility)
+- [8. Measured Outcome Summary](#8-measured-outcome-summary)
+- [9. Threats to Validity & Known Limitations](#9-threats-to-validity--known-limitations)
+- [10. Open Questions](#10-open-questions)
+- [11. Licensing, Reproducibility, and Community Invitation](#11-licensing-reproducibility-and-community-invitation)
+- [12. The HiveBench System & Tooling](#12-the-hivebench-system--tooling)
+- [References](#references)
 
 ---
 
@@ -8,7 +27,7 @@
 
 Large language models (LLMs) exhibit well-documented degradation over long-horizon interactions: performance decays as conversation length grows, relevant information "falls off" rolling context windows, and generation speed slows with growing KV-cache state. We propose **Hive Memory**, an external, multi-agent context curation architecture that decouples *context comprehension* from *context generation*. A fleet of small bidirectional encoder models ("drones") continuously scores, filters, compresses, and reassembles conversation history into a bounded, high-relevance context window that is then delivered to the primary autoregressive model via a cache-managed inference backend.
 
-This paper states the architectural theory, formalizes the mechanisms (targeted masking, tiered routing, managed decay, remembrance passes, deduplication, drift detection), and—critically—presents **labeled, falsifiable predictions** (P1–P11) with explicit logic chains and measurement protocols, so the community can reproduce, challenge, or extend the work. All claims are designed to be testable on consumer hardware with open-weight models. As of 2026-08-24 the protocol is measured end-to-end: P1/P3/P4/P5/P7/P8/P9/P11 PASS (P11 deterministically and live-validated), P2 passes on recall and is falsified on precision (the encoder ceiling, Threat 6), P6/P10 FAIL — each verdict with its evidence and confound fixes in the sections below. The companion tooling — the **HiveBench** evaluation suite and the HiveBench Studio sidecar (§12) — ships with the protocol: deterministic diagnostics, self-contained run bundles, and an engine-agnostic backend layer, so the architecture can be driven against any local (LM Studio / llama.cpp, vLLM) or hosted OpenAI-compatible backend and its claims re-measured on demand.
+This paper states the architectural theory, formalizes the mechanisms (targeted masking, tiered routing, managed decay, remembrance passes, deduplication, drift detection), and — critically — presents **labeled, falsifiable predictions** (P1–P11) with explicit logic chains and measurement protocols, so the community can reproduce, challenge, or extend the work. All claims are designed to be testable on consumer hardware with open-weight models. As of 2026-08-24 the protocol is measured end-to-end: P1/P3/P4/P5/P7/P8/P9/P11 PASS (P11 deterministically and live-validated), P2 passes on recall and is falsified on precision (the encoder ceiling, Threat 6), P6/P10 FAIL — each verdict with its evidence and confound fixes in the sections below. The companion tooling — the **HiveBench** evaluation suite and the HiveBench Studio sidecar (§12) — ships with the protocol: deterministic diagnostics, self-contained run bundles, and an engine-agnostic backend layer, so the architecture can be driven against any local (LM Studio / llama.cpp, vLLM) or hosted OpenAI-compatible backend and its claims re-measured on demand.
 
 ---
 
@@ -18,13 +37,13 @@ This paper states the architectural theory, formalizes the mechanisms (targeted 
 
 Modern open-weight LLMs (e.g., Qwen 3 27B, Gemma 3) exhibit three compounding failure modes in long conversations:
 
-1. **Context loss (recall failure).** Standard local inference uses a first-in-first-out (FIFO) rolling window. When the window fills, old text is discarded blindly—including foundational instructions, system rules, and early architectural decisions. The model must then guess or hallucinate missing information.
+1. **Context loss (recall failure).** Standard local inference uses a first-in-first-out (FIFO) rolling window. When the window fills, old text is discarded blindly — including foundational instructions, system rules, and early architectural decisions. The model must then guess or hallucinate missing information.
 
-2. **Lost-in-the-middle (attention failure).** Even within a large context, models systematically under-utilize information in the middle of the input relative to the beginning and end (Liu et al., 2023). Large raw context windows therefore do not guarantee large *usable* context.
+2. **Lost-in-the-middle (attention failure).** Even within a large context, models systematically under-utilize information in the middle of the input relative to the beginning and end (Liu et al., 2023, [[4]](#ref-4)). Large raw context windows therefore do not guarantee large *usable* context.
 
 3. **Quadratic cost growth (compute failure).** Per-token cost grows with total prompt length; generation slows as conversations lengthen, and memory pressure eventually causes out-of-memory (OOM) crashes on consumer hardware.
 
-Each failure mode is engineerable away rather than irreducible:
+Each failure mode can be engineered away rather than being irreducible:
 
 ```mermaid
 flowchart TB
@@ -47,7 +66,7 @@ flowchart TB
 
 ### 1.2 The proposed remedy
 
-We propose that context management should be **externalized** from the generative model. A small fleet of bidirectional encoders—which can run concurrently and cheaply—pre-processes the entire conversation history and produces a *curated, bounded, high-density context stream*. The primary model receives only what is predicted to matter, at a bounded size, for every turn.
+We propose that context management should be **externalized** from the generative model. A small fleet of bidirectional encoders — which can run concurrently and cheaply — pre-processes the entire conversation history and produces a *curated, bounded, high-density context stream*. The primary model receives only what is predicted to matter, at a bounded size, for every turn.
 
 This is a division of labor: the generative model does what it does best (generation); the encoder fleet does what it does best (comparison, similarity, filtering). We hypothesize this decomposition yields strictly better long-horizon behavior than feeding the primary model raw, unbounded context. The one-sentence version:
 
@@ -97,9 +116,9 @@ So the tests are not about intelligence, similarity to people, or any species-le
 
 The division this presupposes — selection done by the cheap encoder fleet, generation done by the primary model — is not merely assumed: the live data keeps confirming that the generative model is **good at producing answers; it is the wrong tool for selecting context** (see Postulate 3 and Threat 6). HiveBench's tests therefore measure the *selection* layer's decisions, not the generator's, and treat any attempt to "fix" retrieval by making the generator larger as a category error.
 
-**Why we need these tests.** The claim is falsifiable, and the live setting now speaks to it: the 2026-08-22 hive-vs-baselines run (`20260822_211131`) is a clean live result — bounded context carried the fact when history contained it (deterministic P2 recall 90.3% ≥ 90% target), hive ≥ FIFO on 85.1% of retrievable turns (P3), and post-run PES 80.0 GREEN vs rolling 12.2 / FIFO 11.6. What the live setting also proved is that the *measurement* had to be de-confounded first (cross-conversation contamination, hedge-reply poisoning, queen sufficiency confounds — Threat 8, P2 note) before the policy itself could be read. The selection policy is the product — the generative model is a commodity, so if the policy is indistinguishable from FIFO the project has no reason to exist. The tests are also the only defense against silent failure modes that look healthy: a policy that retrieves most of what it stored can still starve if it stored little of what mattered (see the `ingestion_rate` / `perfect_hive_ceiling` decomposition in P2), and they give the calibration knobs (decay multiplier, drift threshold, budget ranges, routing threshold) an objective to be tuned against instead of a guess.
+**Why we need these tests.** The claim is falsifiable, and the live setting now speaks to it: the 2026-08-22 hive-vs-baselines run (`20260822_211131`) is a clean live result — bounded context carried the fact when history contained it (deterministic P2 recall 90.3% ≥ 90% target), hive ≥ FIFO on 85.1% of retrievable turns (P3), and post-run PES 80.0 GREEN vs rolling 12.2 / FIFO 11.6. The live runs also showed that the *measurement* had to be de-confounded first (cross-conversation contamination, hedge-reply poisoning, queen sufficiency confounds — Threat 8, P2 note) before the policy itself could be read. The selection policy is the product — the generative model is a commodity, so if the policy is indistinguishable from FIFO the project has no reason to exist. The tests are also the only defense against silent failure modes that look healthy: a policy that retrieves most of what it stored can still starve if it stored little of what mattered (see the `ingestion_rate` / `perfect_hive_ceiling` decomposition in P2), and they give the calibration knobs (decay multiplier, drift threshold, budget ranges, routing threshold) an objective to be tuned against instead of a guess.
 
-**Why it is beneficial.** The tests convert "context management" from a vibe into a number: one block of the run report shows what the hive stored, what it retrieved, and what the model itself failed to contribute — deterministically, replayable, cheap, with no LLM-queen opinion required. The recall/ingestion split tells us *which* knob to turn and stops us from blaming the architecture for a model's output distribution. They make the bounded-context argument concrete — the lost "off-screen" history is recovered by a selective policy, not mourned — and they publish the ceiling (`perfect_hive_ceiling`) so the metric cannot be gamed into looking better than the data allows.
+**Why it is beneficial.** The tests convert "context management" from a vibe into a number: one block of the run report shows what the hive stored, what it retrieved, and what the model itself failed to contribute — deterministic, replayable, and cheap, with no LLM-queen opinion required. The recall/ingestion split tells us *which* knob to turn and stops us from blaming the architecture for a model's output distribution. They make the bounded-context argument concrete — the lost "off-screen" history is recovered by a selective policy, not mourned — and they publish the ceiling (`perfect_hive_ceiling`) so the metric cannot be gamed into looking better than the data allows.
 
 ### 1.4 The user-visible benefit (measured)
 
@@ -107,14 +126,14 @@ This avenue of research — a bounded-attention selection policy with measurable
 
 1. **Bounded cost, always.** The hive caps the context window regardless of conversation length (adaptive budget: configured 1k–6k by route tier, live-measured 1–3k — the window cap never binds at ≥8k model windows, verified by replay at 8k/16k/32k), so per-turn generation time stays flat: **P1 PASS live** — decode tps constant across 308+ turns (14.5→15.5, +6.7%), no context-bloat slowdown. A FIFO/rolling window grows until the model's context limit, then truncates — that is the moment facts drop and generation slows. The hive's own overhead is negligible against generation: ~3.4ms assembly + ~15ms drone scoring per turn vs. tens of seconds of decoding.
 2. **Facts survive retrieval.** When a fact was stated earlier, a later ask retrieves it: **P2 recall 90.3% live** (≥90% target), and on long conversations the hive beats FIFO on **85.1% of retrievable turns** (4.4:1 when only one side succeeds). This is the difference between the model *answering* and *refusing/hedging* — the failure mode observed live when eviction and hedge-reply poisoning starved the context (hedges were being stored and re-retrieved *as context*; both halves fixed and re-validated).
-3. **Bounded memory.** The store enforces a chunk cap with LRU eviction (verified over 500+ turns, peak RSS ≈ 34.7 MB). No unbounded growth in arbitrarily long sessions — a real leak was found, fixed, and regression-locked.
+3. **Bounded memory.** The store enforces a chunk cap with LRU eviction (verified over 500+ turns, peak RSS ≈34.7 MB). No unbounded growth in arbitrarily long sessions — a real leak was found, fixed, and regression-locked.
 4. **Neutral where it doesn't help.** On short conversations both systems fit the facts (P3 tie) — the hive neither helps nor hurts; its advantage appears exactly where the naive baselines have evicted facts.
 
 ![Figure 1 — The same conversation, two context-delivery paths: naive FIFO eviction vs the hive's curation pipeline, and the measured outcomes of each.](figures/flow.png)
 
 *Figure 1 — The same conversation, two context-delivery paths: naive FIFO eviction vs the hive's curation pipeline, and the measured outcomes of each (P1 flat decode tps; P2 recall 90.3% deterministic; post-run PES 80.0 GREEN vs ~12 baselines).*
 
-The residual weakness is retrieval *efficiency* (10.7% sentence-proxy precision, Threat 6 — the context contains many irrelevant chunks), which the queen judges as not harming answer sufficiency (100% in live runs). The 2026-08-23 **B avenue closed encoder scaling as the remedy**: five encoders (stock, 568M retrieval-specialized [13], two contrastive-tuned variants, plus the earlier graphcodebert cross-encoder [12] and P5 bert-tiny [16]) all land on the same top-K curve — the ceiling is data-structural, not encoder-capacity. The remaining options are to accept the ceiling (users still get correct answers, only a fatter context) or change the task definition (a classifier over chunk classes rather than cosine ranking). That inefficiency is the honest reason the avenue continues.
+The residual weakness is retrieval *efficiency* (10.7% sentence-proxy precision, Threat 6 — the context contains many irrelevant chunks), which the queen judges as not harming answer sufficiency (100% in live runs). The 2026-08-23 **B avenue closed encoder scaling as the remedy**: six encoders (stock, 568M retrieval-specialized [[13]](#ref-13), two contrastive-tuned variants, plus the earlier graphcodebert cross-encoder [[12]](#ref-12) and P5 bert-tiny [[16]](#ref-16)) all land on the same top-K curve — the ceiling is data-structural, not encoder-capacity. The remaining options are to accept the ceiling (users still get correct answers, only a fatter context) or change the task definition (a classifier over chunk classes rather than cosine ranking). That inefficiency is the honest reason the avenue continues.
 
 ### 1.5 Why this component is needed, why it affects all LLM usage, and why it must be separate
 
@@ -122,7 +141,7 @@ The residual weakness is retrieval *efficiency* (10.7% sentence-proxy precision,
 
 **Why it affects all LLM usage.** The failure is universal; so is the remedy. The hive operates on the *context*, not the model — the same bounded assembly is delivered through the same OpenAI-compatible seam, and its universality is measured on **llama.cpp** (LM Studio, the live backend here): every live turn was served by llama.cpp across different model families (bonsai-27b, the qwen MoE variants, plus gemma in the speed probe). The claim is **expected, but untested, on vLLM** (PagedAttention): the dormant `VLLMBackend` is written and mock-tested, and the engine's KV-paging API is the intended host for surgical cache edits, but no live measurement has been taken on it yet. On local hardware the hive prevents the conversation-driven KV spill (the bounded context keeps KV small, so decode stays at full GPU speed regardless of conversation length); on API deployments it caps token cost per turn (the context is fixed-size, so billing is predictable); in multi-user/multi-GPU serving it bounds each session's KV, raising sessions-per-VRAM. There is no LLM deployment where an unbounded, unmanaged context is a feature.
 
-**Why it must be separate.** Three reasons, two measured: (1) *The generative model is the wrong tool for selection* (Postulate 3). Selecting context is a comprehension task; bidirectional encoders are orders of magnitude cheaper and better at it. Measured: using the 27B generative model as an encoder proxy yields 0.2 effective tps — tens of seconds per turn on the hot path — and it would still hit the same relevance ceiling. (2) *Universality without retraining.* Memory inside the model means retraining every model and every vendor. An external layer curates context for any model, any size, without touching weights — it is the only form of the remedy that generalizes across the ecosystem. (3) *Falsifiability.* The P1–P11 protocol exists because the selection layer is inspectable, replayable, and measurable; internalized memory would be an unobservable black box. The separation is therefore not an implementation preference — it is what makes the architecture cheap, universal, and testable at the same time.
+**Why it must be separate.** Three reasons: (1) *The generative model is the wrong tool for selection* (Postulate 3). Selecting context is a comprehension task; bidirectional encoders are orders of magnitude cheaper and better at it. Measured: using the 27B generative model as an encoder proxy yields 0.2 effective tps — tens of seconds per turn on the hot path — and it would still hit the same relevance ceiling. (2) *Universality without retraining.* Memory inside the model means retraining every model and every vendor. An external layer curates context for any model, any size, without touching weights — it is the only form of the remedy that generalizes across the ecosystem. (3) *Falsifiability.* The P1–P11 protocol exists because the selection layer is inspectable, replayable, and measurable; internalized memory would be an unobservable black box. The separation is therefore not an implementation preference — it is what makes the architecture cheap, universal, and testable at the same time.
 
 **Setup-independence.** The hive is a boon to LLM usage *regardless of deployment*, and it is fully portable across hardware. The hive itself is **CPU-resident** — drones, scoring, assembly, drift, and dedup contain no GPU code and run on CPU threads; it communicates with the generative model only through the OpenAI-compatible backend seam, so it is indifferent to what serves the model: AMD (LM Studio / llama.cpp, the environment this project was measured on), NVIDIA (vLLM — the dormant `VLLMBackend` is written and mock-tested), cloud APIs, or multi-GPU servers. The GPU runs the generative model; the hive curates for it, on CPU, for any vendor, and every measured benefit (flat latency, fact survival, bounded memory, KV no-spill, bounded API token cost) transfers unchanged. No measurement in this paper depends on GPU vendor or model family.
 
@@ -131,10 +150,10 @@ The residual weakness is retrieval *efficiency* (10.7% sentence-proxy precision,
 The long-context cost problem has three independent axes, and this paper's architecture is deliberately **one** of them:
 
 - **Selection** (what this project does): *which* tokens deserve to be in front of the model at all. The hive keeps the context bounded (1–3k tokens live-measured) and relevance-curated, so the KV cache only ever holds curated tokens plus a byte-stable pinned prefix.
-- **Precision** (what TurboQuant does): *how many bits* each KV value costs. TurboQuant (Google, ICLR 2026 [11]) is an online vector quantizer — random rotation plus per-coordinate Lloyd-Max scalar quantization [15] — that stores the KV cache at ~3–4 bits with near-zero quality loss and a proof of near-optimal distortion. It compresses the KV that exists; it does not decide what exists.
-- **Container** (what PagedAttention / llama.cpp prefix caching do, and what edge-native MoE servers like FreeToken [19] push further with bandwidth-adaptive expert caching): *how* the KV is organized and reused.
+- **Precision** (what TurboQuant does): *how many bits* each KV value costs. TurboQuant (Google, ICLR 2026, [[11]](#ref-11)) is an online vector quantizer — random rotation plus per-coordinate Lloyd-Max scalar quantization [[15]](#ref-15) — that stores the KV cache at ~3–4 bits with near-zero quality loss and a proof of near-optimal distortion. It compresses the KV that exists; it does not decide what exists.
+- **Container** (what PagedAttention / llama.cpp prefix caching do, and what edge-native MoE servers like FreeToken [[19]](#ref-19) push further with bandwidth-adaptive expert caching): *how* the KV is organized and reused.
 
-These are **composable, not competing** (the 2026 KV-compression landscape explicitly frames the axes this way). A hive-curated 1–3k context with TurboQuant KV is `raw_history / budget × ~6` smaller than raw — e.g. a 50k-token conversation is ~150x smaller in KV — because the selection saving multiplies the precision saving on the surviving tokens. TurboQuant is also the *better* fit on exactly the hardware this project measures on: consumer AMD GPUs have no FP8-attention path, and TurboQuant works without it.
+These are **composable, not competing**: TurboQuant and FreeToken each attack a single axis [[11]](#ref-11), [[19]](#ref-19), so a hive deployment can stack them unchanged. A hive-curated 1–3k context with TurboQuant KV is `raw_history / budget × ~6` smaller than raw — e.g., a 50k-token conversation is ~150× smaller in KV — because the selection saving multiplies the precision saving on the surviving tokens. TurboQuant is also the *better* fit on exactly the hardware this project measures on: consumer AMD GPUs have no FP8-attention path, and TurboQuant works without it.
 
 Two honest caveats. (1) **Attribution:** Threat 7 already concedes the hive's flat-throughput win is co-produced with llama.cpp's automatic prefix caching; a quantized-KV backend would deepen that co-production. P1's falsification conditions are unchanged, but the throughput claim's attribution would need another clause on replication. (2) **Where freed memory should go:** the P4 sweep measured that looser cutoffs wash out the decay signal, and Threat 6's precision ceiling caps what a fatter context buys — so the honest use of KV headroom is more concurrent sessions and no KV spill, not a larger budget.
 
@@ -144,17 +163,17 @@ Two honest caveats. (1) **Attribution:** Threat 7 already concedes the hive's fl
 
 | Work | Relevance | How Hive differs |
 |---|---|---|
-| TurboQuant (Google, ICLR 2026) [11] | Online vector quantization: KV cache at ~3–4 bits, near-zero loss (precision axis) | Hive attacks the *selection* axis (which tokens) instead; the axes compose (§1.6), so they are complementary rather than alternatives |
-| SHADOW-250M (QLNI/NODEMIND, 2026) | Trained-in two-tier memory: 2k-token live KV + 100M-token 1-bit disk archive with lexical retrieval [10] | The *in-model* version of surplus storage: Hive's comb is external, separable, and falsifiable (P11); SHADOW's own limits (no cross-archive reasoning) are the separation argument (§1.5), and its benchmark shapes (look-alike needles, latest-wins, multi-key) are P11's measurement template |
-| FreeToken (Yang et al., 2026) [19] | Edge-native MoE serving: bandwidth-adaptive expert caching and recurrent-state checkpoints anchored at the semantic boundaries where agent harnesses edit context (container axis) | Composes on the container axis exactly as TurboQuant does on precision (1.6): hive shrinks and curates the token stream, FreeToken serves what remains cheaply on consumer hardware - its dominant costs are precisely the unbounded agentic context growth the hive removes |
-| Lost in the Middle (Liu et al., 2023) | Documents the attention-failure phenomenon | Hive treats it as a *design problem to engineer around*, not an irreducible limit |
-| Retrieval-Augmented Generation (Lewis et al., 2020) | Retrieval before generation improves groundedness | Hive retrieves from *its own conversation*, not an external corpus, and does so continuously, not per-query |
-| Don't Stop Pretraining (Gururangan et al., 2020); SciBERT/BioBERT/CodeBERT | Domain-adaptive pretraining improves downstream performance | Basis for targeted masking and domain-optimized drones |
-| PagedAttention / vLLM (Kwon et al., 2023) | Page-level KV-cache management avoids memory fragmentation and enables surgical edits | Hive's KV-cache manipulation depends on this primitive |
-| MemGPT (Packer et al., 2023) | OS-inspired memory paging between main and external context | Hive uses *learned relevance scoring* (encoder fleet) rather than OS-style paging heuristics — extended by the comb tier (P11), which is exactly paging with learned scoring |
-| LLMLingua (Jiang et al., 2023) | Prompt compression accelerates inference | Hive compresses *persistent* memory, not just the current prompt, with decay-aware retention |
-| Generative Agents (Park et al., 2023) | Agents maintain memory with importance scoring and reflection | Hive formalizes the forgetting side with an explicit, tunable decay matrix |
-| Ebbinghaus forgetting curve (1885) | Exponential forgetting over time | The *Sharp Decay Matrix* is a computational analogue, with *escalating* friction on re-saved items |
+| TurboQuant (Google, ICLR 2026) [[11]](#ref-11) | Online vector quantization: KV cache at ~3–4 bits, near-zero loss (precision axis) | Hive attacks the *selection* axis (which tokens) instead; the axes compose (§1.6), so they are complementary rather than alternatives |
+| SHADOW-250M (QLNI/NODEMIND, 2026) [[10]](#ref-10) | Trained-in two-tier memory: 2k-token live KV + 100M-token 1-bit disk archive with lexical retrieval | The *in-model* version of surplus storage: Hive's comb is external, separable, and falsifiable (P11); SHADOW's own limits (no cross-archive reasoning) are the separation argument (§1.5), and its benchmark shapes (look-alike needles, latest-wins, multi-key) are P11's measurement template |
+| FreeToken (Yang et al., 2026) [[19]](#ref-19) | Edge-native MoE serving: bandwidth-adaptive expert caching and recurrent-state checkpoints anchored at the semantic boundaries where agent harnesses edit context (container axis) | Composes on the container axis exactly as TurboQuant does on precision (§1.6): the hive shrinks and curates the token stream; FreeToken serves what remains cheaply on consumer hardware — its dominant costs are precisely the unbounded agentic context growth the hive removes |
+| Lost in the Middle (Liu et al., 2023) [[4]](#ref-4) | Documents the attention-failure phenomenon | Hive treats it as a *design problem to engineer around*, not an irreducible limit |
+| Retrieval-Augmented Generation (Lewis et al., 2020) [[2]](#ref-2) | Retrieval before generation improves groundedness | Hive retrieves from *its own conversation*, not an external corpus, and does so continuously, not per-query |
+| Don't Stop Pretraining (Gururangan et al., 2020) [[3]](#ref-3); SciBERT/BioBERT/CodeBERT | Domain-adaptive pretraining improves downstream performance | Basis for targeted masking and domain-optimized drones |
+| PagedAttention / vLLM (Kwon et al., 2023) [[5]](#ref-5) | Page-level KV-cache management avoids memory fragmentation and enables surgical edits | Hive's KV-cache manipulation depends on this primitive |
+| MemGPT (Packer et al., 2023) [[7]](#ref-7) | OS-inspired memory paging between main and external context | Hive uses *learned relevance scoring* (encoder fleet) rather than OS-style paging heuristics — extended by the comb tier (P11), which is exactly paging with learned scoring |
+| LLMLingua (Jiang et al., 2023) [[6]](#ref-6) | Prompt compression accelerates inference | Hive compresses *persistent* memory, not just the current prompt, with decay-aware retention |
+| Generative Agents (Park et al., 2023) [[8]](#ref-8) | Agents maintain memory with importance scoring and reflection | Hive formalizes the forgetting side with an explicit, tunable decay matrix |
+| Ebbinghaus forgetting curve (1885) [[1]](#ref-1) | Exponential forgetting over time | The *Sharp Decay Matrix* is a computational analogue, with *escalating* friction on re-saved items |
 
 ---
 
@@ -165,7 +184,7 @@ Hive Memory is organized into five functional layers. (The implementation itself
 | Layer | Function | Core mechanisms |
 |---|---|---|
 | **Cortex** | Orchestration & routing | Task classification, drone fleet dispatch, congestion detection, graceful degradation, auto-scaling |
-| **Sieve** | Relevance scoring | Ultra-small encoder (≈60 MB, paraphrase-MiniLM-L3-v2 default [14]) for fast similarity; medium encoder (≈400 MB, domain-optimized) for uncertain cases; ≥4-character content-word filter; confidence estimation via prediction variance |
+| **Sieve** | Relevance scoring | Ultra-small encoder (≈60 MB, paraphrase-MiniLM-L3-v2 default [[14]](#ref-14)) for fast similarity; medium encoder (≈400 MB, domain-optimized) for uncertain cases; ≥4-character content-word filter; confidence estimation via prediction variance |
 | **Membrane** | Selective filtering | Semantic deduplication (cosine > 0.92, keep densest), topic-drift detection and reset |
 | **Retention** | Memory & decay | Remembrance pass (eviction interception), Sharp Decay Matrix (exponential, escalating friction), stale-context acceleration, **comb** (P11: surplus SSD tier for topic-return resurrection) |
 | **Focal** | Assembly | Adaptive token budget (configured 1k–6k by route tier; live-measured 1–3k), confidence-weighted sorting, final compressed context construction |
@@ -243,7 +262,7 @@ Each prediction below is **labeled** with its identifier, a falsifiable statemen
 **Logic chain:**
 1. Generation cost is dominated by total prompt size (KV-cache state) in naive systems.
 2. Hive bounds prompt size at the adaptive budget (≤6k tokens by route-tier configuration) for every turn.
-3. Therefore prompt size—and per-token generation cost—is approximately constant.
+3. Therefore prompt size — and per-token generation cost — is approximately constant.
 4. *Conclusion:* throughput is flat.
 
 **Measurement:** Record tokens/sec at turns 10, 50, 100, 200, 500 under (a) naive FIFO and (b) hive-curated context, same model, same hardware, same conversation.
@@ -251,7 +270,7 @@ Tokens/sec is the model's *decode* rate, recorded from the backend's `usage.comp
 
 **Falsification:** Tokens/sec drops >10% between turn 10 and turn 500 under the hive condition, OR hive throughput is not meaningfully higher than naive at turn 500.
 
-**Result (2026-08-22/23):** **PASS (live).** Over the longest measured span — a 308-turn live conversation (`runs/20260820_223616`, interrupted by OS sleep, sleep-contaminated turns excluded) — decode tps stayed **flat: 14.5 → 15.5 (+6.7%)**, within the ±10% band. The 500-turn stability test (500+ turns) additionally verified bounded memory (peak RSS ≈ 34.7 MB, no OOM). Scope note: the fixture's longest conversation is ~44 turns, so the 500-turn single-conversation protocol remains partially covered by the 308-turn live span + the 500-turn stability run; a full 500-turn single-conversation replay is open tooling, not an open question about the mechanism.
+**Result (2026-08-22/23):** **PASS (live).** Over the longest measured span — a 308-turn live conversation (`runs/20260820_223616`, interrupted by OS sleep, sleep-contaminated turns excluded) — decode tps stayed **flat: 14.5 → 15.5 (+6.7%)**, within the ±10% band. The 500-turn stability test (500+ turns) additionally verified bounded memory (peak RSS ≈34.7 MB, no OOM). Scope note: the fixture's longest conversation is ~44 turns, so the 500-turn single-conversation protocol remains partially covered by the 308-turn live span + the 500-turn stability run; a full 500-turn single-conversation replay is open tooling, not an open question about the mechanism.
 
 ### P2 — Retrieval Precision Hypothesis
 **Prediction:** Hive achieves ≥85% retrieval precision and ≥90% recall on a labeled test set of 200 query–chunk pairs extracted from long conversations, versus the near-chance precision of FIFO for chunks older than the window boundary.
@@ -266,7 +285,7 @@ Tokens/sec is the model's *decode* rate, recorded from the backend's `usage.comp
 
 **Falsification:** Either metric falls below target on two independent labeled sets.
 
-**Result (2026-08-22/23):** **SPLIT — recall PASS, precision FAIL (as written, the conjunction is falsified on precision).** The recall clause is met: deterministic P2 recall **90.3% live** (`20260822_211131`, ≥90% target), **93.9%** on the isolated-store replay, and **93.5% honest stated-facts recall** (`20260822_live3`; `ingestion_rate` 33.9–48.4% — the model-fidelity bound on what any hive could retrieve; `perfect_hive_ceiling` reported alongside). The precision clause is **not met**: sentence-proxy precision 10.7% live, and no selection threshold reaches ≥85% precision at ≥90% recall on the hard same-domain pairs (best ≈ 36–40%) — the encoder ceiling measured across six encoders (Threat 6). Two consequences, both documented: (1) the assembled context contains many irrelevant chunks — the deterministic fact-presence evidence (90.3% recall) shows the stated facts are in the context, and the queen's sufficiency verdict corroborates (softly: it sees the model's answer and is the same model family, Threat 1), but precision itself is the architecture's open efficiency question, not its recall question — the recall half of P2 is closed, and the §8 table reports both halves honestly. The deterministic diagnostic (`experiments.retrieval_diagnostic`) is the canonical evidence; the queen-based `ground_truth` precision block is confounded (hardcoded `predicted_relevant=True`) and retained only for schema compatibility.
+**Result (2026-08-22/23):** **SPLIT — recall PASS, precision FAIL (as written, the conjunction is falsified on precision).** The recall clause is met: deterministic P2 recall **90.3% live** (`20260822_211131`, ≥90% target), **93.9%** on the isolated-store replay, and **93.5% honest stated-facts recall** (`20260822_live3`; `ingestion_rate` 33.9–48.4% — the model-fidelity bound on what any hive could retrieve; `perfect_hive_ceiling` reported alongside). The precision clause is **not met**: sentence-proxy precision 10.7% live, and no selection threshold reaches ≥85% precision at ≥90% recall on the hard same-domain pairs (best ≈36–40%) — the encoder ceiling measured across six encoders (Threat 6). Two consequences, both documented: (1) the assembled context contains many irrelevant chunks — the deterministic fact-presence evidence (90.3% recall) shows the stated facts are in the context, and the queen's sufficiency verdict corroborates (softly: it sees the model's answer and is the same model family, Threat 1) — but precision remains the architecture's open efficiency question; the recall half of P2 is closed, and the §8 table reports both halves honestly. The deterministic diagnostic (`experiments.retrieval_diagnostic`) is the canonical evidence; the queen-based `ground_truth` precision block is confounded (hardcoded `predicted_relevant=True`) and retained only for schema compatibility.
 
 ### P3 — Context Sufficiency Hypothesis
 **Prediction:** For equal token budgets, queen-rated "context sufficiency" is higher for hive-assembled context than for the last-B-tokens FIFO window, on ≥80% of turns sampled in long conversations.
@@ -287,7 +306,7 @@ Tokens/sec is the model's *decode* rate, recorded from the backend's `usage.comp
 **Prediction:** The optimal initial decay multiplier is domain-dependent: code-heavy conversations and prose conversations yield different optima (estimated: prose 1.4–1.8; code 1.8–2.2), and each is discoverable by replay search.
 
 **Logic chain:**
-1. Code context is more modular—dependencies cluster in time (imports, function definitions).
+1. Code context is more modular — dependencies cluster in time (imports, function definitions).
 2. Prose context has longer-range topical dependencies.
 3. The optimal friction multiplier tracks these dependency structures.
 4. *Conclusion:* a single universal multiplier is suboptimal.
@@ -296,7 +315,7 @@ Tokens/sec is the model's *decode* rate, recorded from the backend's `usage.comp
 
 **Result (2026-08-22):** **INCONCLUSIVE — measured, not falsifiable on the current corpus.** Replaying the 15 full-length long conversations under each candidate multiplier, retrievable answer-fact survival is **flat (74.2%) across every multiplier** — decay only affects old chunks (`multiplier^age`), and the relevant facts are recent, so the initial multiplier has no measurable retrieval effect on code-domain conversations. Two blockers: (1) the fixture contains **no prose domain** (all five topics are engineering: auth, database_schema, logging, deployment, api_design), so the code-vs-prose comparison cannot run; (2) the code-domain optimum is flat, so no domain-separation claim is testable with this corpus. An earlier proxy implementation hardcoded `abs(m-2.0)`/`abs(m-1.6)` objectives (guaranteeing "domains differ" by construction) — removed in favor of this real replay. A prose fixture or real logged conversations are required to test the prediction.
 
-**Result (2026-08-23, prose corpus added):** **MEASURED — both domains flat, prediction not supported.** A prose-domain corpus was added to the fixture (`hivebench/tests/fixtures/generated_prose/`, 12 long conversations, 1070 turns — prose-flavored facts, no code blocks, own RNG stream disjoint from the code fixture; `python -m tests.fixtures.synthetic_conversations.generate --prose`). Replaying both domains under the same candidate multipliers: **code flat at 91.1% and prose flat at 78.1% across all seven multipliers** — neither domain shows an optimum, and the two domains do not differ. The flatness is structural: decay multiplies old chunks, relevant facts are recent in both domains, so the initial multiplier never governs what is retrieved. **Conclusion:** the prediction's premise (domain-dependent optima discoverable by replay) is not supported by this corpus; the falsification condition ("optima within the same band") holds — P4 is a measured REPORT, not a PASS. The code-vs-prose comparison machinery now exists; a corpus where relevant facts age (long-horizon dependencies) is required to make the prediction testable.
+**Result (2026-08-23, prose corpus added):** **MEASURED — both domains flat, prediction not supported.** A prose-domain corpus was added to the fixture (`hivebench/tests/fixtures/generated_prose/`, 12 long conversations, 1070 turns — prose-flavored facts, no code blocks, own RNG stream disjoint from the code fixture; `python -m tests.fixtures.synthetic_conversations.generate --prose`). Replaying both domains under the same candidate multipliers: **code flat at 91.1% and prose flat at 78.1% across all seven multipliers** — neither domain shows an optimum, and the two domains do not differ. The flatness is structural: decay multiplies old chunks' scores while relevant facts are recent in both domains, so the initial multiplier never governs what is retrieved. **Conclusion:** the prediction's premise (domain-dependent optima discoverable by replay) is not supported by this corpus; the falsification condition ("optima within the same band") holds — P4 is a measured REPORT, not a PASS. The code-vs-prose comparison machinery now exists; a corpus where relevant facts age (long-horizon dependencies) is required to make the prediction testable.
 
 **Result (2026-08-23, long-horizon corpus):** **PASS — the prediction is measurable and the domains separate beyond the 0.2 band.** The horizon corpora age their facts (establish → recap at age E; code E ∈ {10, 20}, prose E ∈ {24, 32}) and the sweep holds the budget fixed at 1000 tokens. Measured survival curves (real L3-v2 drone, fact-level retrievability):
 
@@ -332,7 +351,7 @@ Code (young facts, no stale penalty) tolerates aggressive decay — recall holds
 
 **Result (2026-08-22):** **PASS.** On the full fixture (50 convs, 80/20 held-out split, 300 steps, bert-tiny, equal compute): targeted masking beat random masking on held-out retrieval precision (0.4409 vs 0.43) with a dramatically better final MLM loss (0.019 vs 0.167), confirming the targeted-masking signal concentrates learning on content-bearing tokens. Report: `models/p5/report.json`; reproducibility: `python -m experiments.p5_targeted_masking --steps 300`.
 
-**Important caveat (see Threat 6):** P5 passing does **not** close the precision ceiling. The P5-trained bert-tiny [16] encoder, re-measured on the live-run query-chunk pairs, scored *worse* than all-MiniLM at every top-K (top-3: 7–9% vs 22%; top-8: 14% vs 22%) — the MLM fit does not transfer to retrieval discrimination at 2-layer scale. P5 confirms *how* to train a domain encoder, but the encoder must be large enough to matter; bert-tiny is not.
+**Important caveat (see Threat 6):** P5 passing does **not** close the precision ceiling. The P5-trained bert-tiny [[16]](#ref-16) encoder, re-measured on the live-run query-chunk pairs, scored *worse* than all-MiniLM at every top-K (top-3: 7–9% vs 22%; top-8: 14% vs 22%) — the MLM fit does not transfer to retrieval discrimination at 2-layer scale. P5 confirms *how* to train a domain encoder, but the encoder must be large enough to matter; bert-tiny is not.
 
 **Falsification:** No statistically significant precision difference at equal compute, or targeted masking loses on an out-of-domain generalization check.
 
@@ -384,7 +403,7 @@ Code (young facts, no stale penalty) tolerates aggressive decay — recall holds
 **Result (2026-08-22/23):** **PASS (live).** Heuristic routing accuracy was **100%** on the labeled routing decisions of the live hive-vs-baselines run (`20260822_211131`; queen-optimal tiers matched every turn). The trained-classifier comparison remains covered by the offline routing/classifier tests; the ≥85% absolute floor holds on the measured set.
 
 ### P9 — Densest-Duplicate Hypothesis
-**Prediction:** When semantically duplicate chunks are found (cosine > 0.92), retaining the information-densest version—rather than the most recent—improves downstream task quality per token, measured by queen sufficiency.
+**Prediction:** When semantically duplicate chunks are found (cosine > 0.92), retaining the information-densest version — rather than the most recent — improves downstream task quality per token, measured by queen sufficiency.
 
 **Logic chain:**
 1. Recent duplicates are often restatements or conversational recaps (low density).
@@ -396,9 +415,9 @@ Code (young facts, no stale penalty) tolerates aggressive decay — recall holds
 
 **Result (2026-08-23):** **PASS (measured, deterministic — no queen).** On the 12 informative turns (recency_favors_verbose conversations): **densest wins 12/12 (100%), recency 0**, and aggregate sufficiency-per-1k is **32.3 vs 17.6** (the recency-kept verbose copies consumed 680 fact tokens vs 371 for densest — ~1.8× the budget for the same fact). The control conversations show **no effect (30.5 vs 30.5 per 1k)** — exactly as designed, since both policies keep the dense copy there. The direction matches the prediction: densest retention delivers the same fact in fewer tokens. Regression-locked in `tests/integration/test_protocol.py::test_p9_duplicate_pairs_merge` + `test_p9_densest_beats_recency`.
 
-![Figure 5 — P9: sufficiency per 1k tokens, densest-kept vs recency-kept. The control (both policies keep the dense copy) shows no effect, as designed.](figures/p9.png)
+![Figure 4 — P9: sufficiency per 1k tokens, densest-kept vs recency-kept. The control (both policies keep the dense copy) shows no effect, as designed.](figures/p9.png)
 
-*Figure 5 — P9: sufficiency per 1k tokens, densest-kept vs recency-kept dedup.*
+*Figure 4 — P9: sufficiency per 1k tokens, densest-kept vs recency-kept dedup.*
 
 **Falsification:** Recency retention wins on ≥55% of turns, or no measurable difference.
 
@@ -413,7 +432,7 @@ Code (young facts, no stale penalty) tolerates aggressive decay — recall holds
 
 **Measurement:** Inject engineered topic changes into test conversations; compare queen sufficiency at turns +1..+3 after the change, reset vs. no-reset.
 
-**Result (2026-08-22):** **FAIL (measured).** Deterministic fact-presence within 3 turns of a fixture topic switch (the long conversations contain 4 topics in sequence; drift detector forced ON at threshold 0.1 — verified to fire on 571/628 fact turns — vs OFF at 0.99, fires 0): reset-on 62.5% vs reset-off 62.3%, **improvement −0.1 pts — no effect.** The mechanism is coherent with the decay mechanics measured in P4's replays: drift penalties multiply *old chunks'* decayed scores, but on the long fixture the relevant facts are recent and already win selection, so the reset changes nothing in the assembled window. The "reset accelerates recovery" claim is **not supported** by the current drift/decay interaction.
+**Result (2026-08-22):** **FAIL (measured).** Deterministic fact-presence within 3 turns of a fixture topic switch (the long conversations contain 4 topics in sequence; drift detector forced ON at threshold 0.1 — verified to fire on 571/628 fact turns — vs OFF at 0.99, which fires 0 times): reset-on 62.5% vs reset-off 62.3%, **improvement −0.1 pts — no effect.** The mechanism is coherent with the decay mechanics measured in P4's replays: drift penalties multiply *old chunks'* decayed scores, but on the long fixture the relevant facts are recent and already win selection, so the reset changes nothing in the assembled window. The "reset accelerates recovery" claim is **not supported** by the current drift/decay interaction.
 
 **Falsification:** No sufficiency improvement within 3 turns, or reset causes a regression (e.g., discarding genuinely cross-cutting context).
 
@@ -427,7 +446,7 @@ Code (young facts, no stale penalty) tolerates aggressive decay — recall holds
 4. On resurrection, comb candidates compete on *raw relevance* (exempt from the stale factor and drift penalties — explicit recalls, not zombies) for the same token budget.
 5. *Conclusion:* topic-return recall goes from structurally 0% to retrievable.
 
-**Measurement:** Deterministic, no queen: synthetic conversations with structure A (facts established) → B (≥ 21 turns, pushing A past the stale wall) → A *returns* with a new query needing an old fact; fact-term presence in the assembled context (the P2 diagnostic's math) with comb enabled vs disabled, budget held fixed (the P4 confound-isolation). The `--return` fixture corpus is the live-benchmark path. The test shapes follow the independent SHADOW-250M archive benchmark [10], mapped onto the comb's clauses: *needle with look-alike distractors* → the crowding clause (resurrected chunks must not displace relevant store chunks), *scattered story facts, latest wins* → topic-return recall (their measured 1.00 at 1M–10M archive is the external reference point for the ≥90% target), *multi-key needles* → multi-fact resurrection (a returned topic asking for several old facts at once), and *fact QA with abstain* → the hedge check (a returned topic whose fact is genuinely absent must not fabricate). SHADOW's own limitation — trained-in retrieval that cannot reason across the archive, two-hop chains degrading at 100M tokens [10] — is the separation argument (§1.5): the comb is external, so its retrieval remains inspectable and its candidates stay within the hive's bounded budget.
+**Measurement:** Deterministic, no queen: synthetic conversations with structure A (facts established) → B (≥ 21 turns, pushing A past the stale wall) → A *returns* with a new query needing an old fact; fact-term presence in the assembled context (the P2 diagnostic's math) with comb enabled vs disabled, budget held fixed (the P4 confound-isolation). The `--return` fixture corpus is the live-benchmark path. The test shapes follow the independent SHADOW-250M archive benchmark [[10]](#ref-10), mapped onto the comb's clauses: *needle with look-alike distractors* → the crowding clause (resurrected chunks must not displace relevant store chunks), *scattered story facts, latest wins* → topic-return recall (their measured 1.00 at 1M–10M archive is the external reference point for the ≥90% target), *multi-key needles* → multi-fact resurrection (a returned topic asking for several old facts at once), and *fact QA with abstain* → the hedge check (a returned topic whose fact is genuinely absent must not fabricate). SHADOW's own limitation — trained-in retrieval that cannot reason across the archive, two-hop chains degrading at 100M tokens [[10]](#ref-10) — is the separation argument (§1.5): the comb is external, so its retrieval remains inspectable and its candidates stay within the hive's bounded budget.
 
 **Retrieval-layer measurement (`experiments/comb_probe.py`, real L3-v2 drone, fixture ground truth, 2026-08-24):** the make-or-break questions were answered before building the corpus: (1) **lexical-overlap ranking beats the drone at every k** on return turns (recall@3 76.4% vs 69.8% on lexically retrievable turns, and ~300× cheaper — the drone's semantic smoothing pulls in same-topic-but-wrong chunks, the same data-structural ceiling as Threat 6); the comb now ranks lexically. (2) **Only 45% of the current fixture's return turns are lexically retrievable** — 55% are artifact-labeled: the answer-map's first-occurrence rule labels old-topic chunks as "relevant" to composition queries that never lexically name them ("How does rollbacks fit with order schema…?"). Those are corpus-design misses, not retrieval failures — the `--return` corpus uses SHADOW-style *pure-fact* return questions ("What did we settle for {aspect} on the {feature}?") that lexically name the old decision. (3) **Crowding is mild:** archive records score p50 0.20 vs relevant store chunks 0.54.
 
@@ -469,7 +488,7 @@ To make all predictions reproducible on consumer hardware with open weights, we 
 
 **Hardware baseline:** Windows 11 (native; WSL2 optional for vLLM) on a single consumer GPU
 with ≥16 GB VRAM (e.g., RTX 4090); 32 GB system RAM. The environment this project was
-actually measured on: AMD Radeon RX 7900 XT (24 GB), LM Studio / llama.cpp as the sole
+actually measured on: AMD Radeon RX 7900 XT (20 GB), LM Studio / llama.cpp as the sole
 live backend; the hive itself is CPU-resident (drones, scoring, assembly, drift, dedup —
 no GPU code), so the measurements transfer across GPU vendors.
 
@@ -477,25 +496,24 @@ no GPU code), so the measurements transfer across GPU vendors.
 - Primary (measured): `prism-ml/bonsai-27b` — the only loaded model that honored
   `enable_thinking=false` in the speed probe; the qwen MoE family was probed but burns
   its output budget on reasoning (empty visible replies) and was unusable live.
-- Ultra-small drone: `sentence-transformers/paraphrase-MiniLM-L3-v2` [18] (default since                         
-  2026-08-23; ≈60 MB — footprint swap, same retrieval curve; `all-MiniLM-L6-v2` remains
-  supported).
+- Ultra-small drone: `sentence-transformers/paraphrase-MiniLM-L3-v2` [[18]](#ref-18)
+  (default since 2026-08-23; ≈60 MB — footprint swap, same retrieval curve;
+  `all-MiniLM-L6-v2` remains supported).
 - Medium drone: domain-optimized encoder (e.g., `microsoft/codebert-base` for code;
   `deberta-v3-base` for prose). P6 measured it as non-discriminating (see P6) — opt-in.
 
 **Backend (dual):**
-- **LM Studio (llama.cpp [17])** — OpenAI-compatible API on `localhost:1234`; the **measured**
+- **LM Studio (llama.cpp [[17]](#ref-17))** — OpenAI-compatible API on `localhost:1234`; the **measured**
   host. No surgical KV-cache API; benefits from the hive via the smaller compressed
   context + a byte-stable pinned prefix that llama.cpp's automatic prefix caching reuses.
-- **vLLM (PagedAttention [5])** — OpenAI-compatible API on `localhost:8000`; enables surgical
+- **vLLM (PagedAttention [[5]](#ref-5))** — OpenAI-compatible API on `localhost:8000`; enables surgical
   page-level KV-cache edits. The `VLLMBackend` is **written and mock-tested but not
   live-validated** — the paper's measurements are all llama.cpp; the vLLM path is the
   intended replication target (see Threat 7 for the prefix-cache attribution caveat).
 
-**Gatekeeper interop:** where the existing Gatekeeper Studio engine already solves a problem
-(endpoint resolution, confidence calibration, reliability tracking, rollback, gate lifecycle),
-the hive consumes it through the documented `HOST-SEAM.md` contract rather than re-implementing
-it.
+**Harness interop:** where the studio harness already solves a problem
+(provider/endpoint resolution, health tracking, rollback), the hive consumes it through the
+documented integration seam (`docs/INTEGRATE.md`) rather than re-implementing it.
 
 **Test corpus (fixed):**
 - 50 synthetic conversations: 10 short (10–20 turns, single topic), 20 medium (30–50 turns, 2–3 topic shifts), 15 long (80–100 turns, multiple shifts, cross-cutting dependencies), 5 edge cases (rapid topic switching, contradictory instructions).
@@ -517,7 +535,7 @@ it.
 
 ---
 
-## 8. Predicted Outcome Summary
+## 8. Measured Outcome Summary
 
 | Metric | Naive FIFO (baseline) | S3/S5 targets (design) | Measured (2026-08-23) |
 |---|---|---|---|
@@ -532,18 +550,18 @@ it.
 
 *Sources: live runs `20260822_211131` (hive-vs-baselines), `20260822_live3` (stated-facts reframe), `20260823_014521` (the **full 20-conv evidence run** — 673 turns, PES 73.1, deterministic P2 75.7% honest recall at 54.3% ingestion, whose missing P1–P11 protocol phase was completed standalone on 2026-08-24 and **reproduced every verdict**: P1/P3/P4/P8/P9/P11 PASS, P2/P6/P10 FAIL, P5/P7 SKIP-with-own-PASS), the B-avenue encoder probe, and the 500-turn stability test. The precision row is the measured encoder ceiling (Threat 6): the context is fatter than needed — the deterministic fact-presence evidence (P2 recall 90.3% live / 75.7% on 20 convs) shows the stated facts are in the context, and the queen's "100% sufficient" verdict is a corroborating soft signal (it sees the model's answer; Threat 1), not independent evidence of correctness.*
 
-![Figure 6 — Post-run PES: hive vs the no-hive baselines on the same conversations (run 20260822_211131).](figures/pes.png)
+![Figure 5 — Post-run PES: hive vs the no-hive baselines on the same conversations (run 20260822_211131).](figures/pes.png)
 
-![Figure 7 — The adaptive budget (p50) is invariant across 8k/16k/32k model windows: the route-tier ranges bind, never the window cap.](figures/budget.png)
+![Figure 6 — The adaptive budget (p50) is invariant across 8k/16k/32k model windows: the route-tier ranges bind, never the window cap.](figures/budget.png)
 
-*Figures 6–7 — The headline comparison (hive PES 80.0 GREEN vs rolling 12.2 / FIFO 11.6) and the budget-ceiling measurement (byte-identical behavior at 8k/16k/32k windows).*
+*Figures 5–6 — The headline comparison (hive PES 80.0 GREEN vs rolling 12.2 / FIFO 11.6) and the budget-ceiling measurement (byte-identical behavior at 8k/16k/32k windows).*
 
 ---
 
 ## 9. Threats to Validity & Known Limitations
 
 1. **Queen circularity.** The queen is the same model family being served. P7 mitigates via agreement checks, but agreement is not ground truth; a systematic shared bias between queen and model is possible.
-2. **Synthetic-corpus bias.** Generated conversations may not capture real user messiness. Real-world validation after S5 is mandatory before generalizing.
+2. **Synthetic-corpus bias.** Generated conversations may not capture real user messiness. Validation on real user conversations is mandatory before generalizing.
 3. **Hardware ceiling.** VRAM contention between the medium drone and the primary model may force CPU fallback, altering latency predictions.
 4. **Decay realism.** The Sharp Decay Matrix is an engineering heuristic with cognitive-science inspiration, *not* a validated model of human forgetting; its value is empirical, not neuroscientific.
 5. **Confounded ablations.** Disabling a component changes downstream decisions of other components; ablation results should be read as upper bounds on component contribution.
@@ -554,17 +572,17 @@ it.
     | Encoder | top-1 prec | top-3 prec | top-5 prec | top-8 prec | best prec @ ≥90% recall |
     |---|---|---|---|---|---|
     | all-MiniLM (stock baseline) | 84.0% | 72.5% | 59.1% | 46.7% | 40.3% |
-    | **bge-m3 (B1: 568M, retrieval-specialized [13])** | 84.0% | 69.6% | 59.1% | 46.7% | **41.0%** |
+    | **bge-m3 (B1: 568M, retrieval-specialized [[13]](#ref-13))** | 84.0% | 69.6% | 59.1% | 46.7% | **41.0%** |
     | all-MiniLM contrastive-tuned, fresh-seed synthetic (B2) | 72.0% | 62.3% | 58.1% | 47.5% | 38.2% |
     | all-MiniLM contrastive-tuned, earlier live run (B3) | 80.0% | 71.0% | 59.1% | 46.7% | 40.5% |
 
     A 568M-param, retrieval-specialized encoder (25× all-MiniLM's size, trained on 1.2B+ pairs) and two task-tuned (contrastive, MultipleNegativesRankingLoss) variants **all land on the same top-K curve** — no configuration reaches ≥85% precision at ≥90% recall. Scale does not break the ceiling; task tuning does not break it; the same-domain topics are not separable by any of the six encoders now measured (all-MiniLM, graphcodebert cross-encoder, P5 bert-tiny, bge-m3, B2-tuned, B3-tuned).
 
-    ![Figure 4 — The B avenue: top-K retrieval precision for the stock, scaled (bge-m3), and task-tuned encoders — all on the same curve.](figures/b.png)
+    ![Figure 7 — The B avenue: top-K retrieval precision for the stock, scaled (bge-m3), and task-tuned encoders — all on the same curve.](figures/b.png)
 
-    *Figure 4 — The B avenue: top-K retrieval precision for the stock, scaled (bge-m3), and task-tuned encoders — all on the same curve (data: table above).* **Conclusion: the ceiling is data-structural, not encoder-capacity.** The remedy is no longer "find a better encoder" — the remaining options are (a) accept the ceiling (the context is fatter than needed, but the deterministic fact-presence evidence — P2 recall 90.3% live — shows the facts the model stated are in the context; the queen's "100% sufficient" verdict is a corroborating *soft* signal — it sees the model's answer and is the same model family, Threat 1 — not independent evidence of correctness) or (b) change the *task definition* (e.g., a classifier over chunk classes rather than cosine ranking).
+    *Figure 7 — The B avenue: top-K retrieval precision for the stock, scaled (bge-m3), and task-tuned encoders — all on the same curve (data: table above).* **Conclusion: the ceiling is data-structural, not encoder-capacity.** The remedy is no longer "find a better encoder" — the remaining options are (a) accept the ceiling (the context is fatter than needed, but the deterministic fact-presence evidence — P2 recall 90.3% live — shows the facts the model stated are in the context; the queen's "100% sufficient" verdict is a corroborating *soft* signal — it sees the model's answer and is the same model family, Threat 1 — not independent evidence of correctness) or (b) change the *task definition* (e.g., a classifier over chunk classes rather than cosine ranking).
 
-    **Matryoshka probe (2026-08-23):** bge-m3 truncated to 256 dimensions reproduces the full 1024-dim curve *exactly* on the same held-out pairs — the variable-size-embedding (MRL) technique [9] costs nothing on this set, confirming the sentence-transformers efficiency claim (smaller stored vectors, identical ranking) on our corpus.
+    **Matryoshka probe (2026-08-23):** bge-m3 truncated to 256 dimensions reproduces the full 1024-dim curve *exactly* on the same held-out pairs — the variable-size-embedding (MRL) technique [[9]](#ref-9) costs nothing on this set, confirming the sentence-transformers efficiency claim (smaller stored vectors, identical ranking) on our corpus.
 7. **Prefix-cache attribution.** On backends with automatic prefix caching (LM Studio / llama.cpp), flat throughput is co-produced by the hive's bounded context *and* a byte-stable pinned system prefix whose KV is reused every turn. The naive FIFO baseline's window shifts each turn and never reuses KV, so the P1 comparison is "curation + stable prefix" vs. "shifting window" rather than raw context length. The falsification conditions are unchanged, but the throughput claim is attributable to both mechanisms, and replication on a backend without prefix caching (e.g., vLLM without pinned pages) may observe a smaller gap.
 8. **Evaluation-harness confounds.** Live validation surfaced two harness-level failure modes that look like architecture failures if unaddressed: (a) *cross-conversation contamination* — running multiple conversations through one context store lets earlier conversations' chunks crowd out the current one's, collapsing retrieval precision; conversations must be isolated per store; (b) *hedge-reply poisoning* — if the model's "no information" refusals are stored as chunks, they are later retrieved *as context* and perpetuate refusal, and a strict "answer only from context" system prompt forces exactly those refusals on first-mention turns; refusals should be filtered from the store and the prompt should permit clearly-marked general-knowledge fallback so facts can be ingested.
 9. **Decay-measurement interactions (2026-08-23).** Two properties of the decay/budget machinery shaped the P4 measurement and are themselves findings: (a) the adaptive budget's high-relevance feedback (bigger store → bigger budget → looser cutoff) washes the decay multiplier's effect out entirely — the P4 sweep holds the budget fixed to isolate it; (b) the stale factor (`×0.5` at age > 20) makes facts older than 20 turns unretrievable at every candidate multiplier — lowering the multiplier cannot recover them; only the remembrance/re-reference mechanics can. Both are regression-locked.
@@ -583,9 +601,9 @@ it.
 
 ## 11. Licensing, Reproducibility, and Community Invitation
 
-- All code, logs, and protocols will be released open-source.
-- All test corpora are synthetic and will be published for reuse.
-- We explicitly invite: (a) independent replication of P1–P11 on different hardware, and (b) adversarial construction of conversations that defeat the architecture. Contributions of domain-specific masked vocabularies and drone checkpoints are accepted **only under a verification gate**: reproducible training/evaluation scripts, provenance and whitelist-compliance records, and maintainer review before inclusion — unverified third-party assets are not merged into the repository.
+- All code, logs, and protocols are released open-source in this repository.
+- All test corpora are synthetic and ship in-repo for reuse (`hivebench/tests/fixtures/`).
+- We explicitly invite: (a) independent replication of P1–P11 on different hardware, and (b) adversarial construction of conversations that defeat the architecture. Contributions of domain-specific masked vocabularies and drone checkpoints are accepted **only under a verification gate**: reproducible training/evaluation scripts, provenance and license-compliance records, and maintainer review before inclusion — unverified third-party assets are not merged into the repository.
 
 ---
 
@@ -608,7 +626,7 @@ The architecture in this paper ships as a working system — not just results. H
 **The Studio** (the HiveBench Studio sidecar + dsh plugins):
 - A local-first FastAPI sidecar exposes the hive over HTTP (`/v1/hive/turn|curate|observe`, `/v1/protocol/run`, `/v1/report/*`, `/v1/engines`, model management) — the seam any shell or web UI plugs into.
 - `dsh-hive` / `dsh-bench` plugins integrate the curation and the protocol surface into a DeepSeek-Harness-based agent shell: every agent step is curated, replies are observed back into the store, and `/bench` launches and summarizes protocol runs without leaving the agent.
-- A model-management layer (own llama.cpp-server lifecycle + live Hugging Face acquisition) means the Studio is not tied to a specific launcher application.
+- A model-management layer (its own llama.cpp server lifecycle + live Hugging Face acquisition) means the Studio is not tied to a specific launcher application.
 
 **What this means for local LLM use.** The hive itself is CPU-resident and engine-agnostic: it curates for any backend through the OpenAI-compatible seam, so the measured benefits (flat throughput, fact survival, bounded memory, no KV spill, bounded per-turn token cost) transfer to any local or hosted model. The evaluation suite makes the claim self-auditing: any deployment can re-run the deterministic diagnostics and the live protocol against its own model and hardware, and the comparison tool reports whether the policy improved or regressed. One honest caveat, unchanged from the body of the paper: selection *efficiency* (retrieval precision) is capped by the encoder ceiling (Threat 6) — the system is honest about what it optimizes and what it cannot.
 
@@ -616,22 +634,22 @@ The architecture in this paper ships as a working system — not just results. H
 
 ## References
 
-1. Ebbinghaus, H. (1885). *Über das Gedächtnis* (On Memory).
-2. Lewis, P., et al. (2020). Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks. *NeurIPS*. https://arxiv.org/abs/2005.11401
-3. Gururangan, S., et al. (2020). Don't Stop Pretraining: Adapt Language Models to Domains and Tasks. *ACL*. https://arxiv.org/abs/2004.10964
-4. Liu, N., et al. (2023). Lost in the Middle: How Language Models Use Long Contexts. *TACL*. https://arxiv.org/abs/2307.03172
-5. Kwon, W., et al. (2023). Efficient Memory Management for Large Language Model Serving with PagedAttention. *SOSP*. https://arxiv.org/abs/2309.06180
-6. Jiang, H., et al. (2023). LLMLingua: Compressing Prompts for Accelerated Inference of Large Language Models. *EMNLP*. https://arxiv.org/abs/2310.05736
-7. Packer, C., et al. (2023). MemGPT: Towards LLMs as Operating Systems. https://arxiv.org/abs/2310.08560
-8. Park, J., et al. (2023). Generative Agents: Interactive Simulacra of Human Behavior. *UIST*. https://arxiv.org/abs/2304.03442
-9. Sentence-Transformers documentation — *Matryoshka Embeddings (variable-size embeddings)*. https://www.sbert.net/examples/training/matryoshka/README.html (MRL: Matryoshka Representation Learning; truncation to small dimensions with minimal quality loss).
-10. QLNI (NODEMIND). *SHADOW-250M-Instruct: 250M-parameter language model with a 100M-token offline disk archive* (two-tier KV cache: 2,048-token full-precision window + 1-bit/320-byte-per-token on-disk archive; trained-in archive retrieval; benchmark harness and raw results shipped in the repo). GitHub: https://github.com/QLNI/SHADOW-250M-Instruct; Hugging Face: https://huggingface.co/NODEMIND/SHADOW-250M.
-11. Zandieh, A., Daliri, M., Hadian, M., & Mirrokni, V. (2025). TurboQuant: Online Vector Quantization with Near-optimal Distortion Rate. *ICLR 2026*. https://arxiv.org/abs/2504.19874 (OpenReview: https://openreview.net/forum?id=tO3ASKZlok)
-12. Guo, D., et al. (2021). GraphCodeBERT: Pre-training Code Representations with Data Flow. *ICLR*. https://arxiv.org/abs/2009.08366
-13. Chen, J., et al. (2024). BGE M3-Embedding: Multi-Lingual, Multi-Functional, Multi-Granular Text Embeddings Through Self-Knowledge Distillation. *arXiv:2402.03216*. https://arxiv.org/abs/2402.03216
-14. Reimers, N., & Gurevych, I. (2019). Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks. *EMNLP*. https://arxiv.org/abs/1908.10084
-15. Lloyd, S. (1982). Least Squares Quantization in PCM. *IEEE Transactions on Information Theory*, 28(2). https://ieeexplore.ieee.org/document/1056489
-16. Bhargava, Y., et al. (2021). Well-Read Students Learn Better: On the Importance of Pre-training Compact Models. *arXiv:2108.08960*. https://arxiv.org/abs/2108.08960
-17. Gerganov, G., et al. llama.cpp — LLM inference in C/C++ with automatic prefix caching and Vulkan backend. https://github.com/ggml-org/llama.cpp
-18. Wang, W., Wei, F., Dong, L., Bao, H., Yang, N., & Zhou, M. (2020). MiniLM: Deep Self-Attention Distillation for Task-Agnostic Compression of Pre-Trained Transformers. *NeurIPS*. https://arxiv.org/abs/2002.10957 — model card for the default ultra-small drone: https://huggingface.co/sentence-transformers/paraphrase-MiniLM-L3-v2
-19. Yang, S., Fan, X., Pan, M., Xi, H., Wang, Z., Sun, S., Keutzer, K., Han, S., Zaharia, M., Xu, C., & Stoica, I. (2026). FreeToken: Efficient Edge-Native MoE Serving with Bandwidth-Adaptive Execution. *arXiv:2608.16157*. https://arxiv.org/abs/2608.16157
+1. <a name="ref-1"></a>Ebbinghaus, H. (1885). *Über das Gedächtnis* (On Memory).
+2. <a name="ref-2"></a>Lewis, P., et al. (2020). Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks. *NeurIPS*. [arXiv:2005.11401](https://arxiv.org/abs/2005.11401)
+3. <a name="ref-3"></a>Gururangan, S., et al. (2020). Don't Stop Pretraining: Adapt Language Models to Domains and Tasks. *ACL*. [arXiv:2004.10964](https://arxiv.org/abs/2004.10964)
+4. <a name="ref-4"></a>Liu, N., et al. (2023). Lost in the Middle: How Language Models Use Long Contexts. *TACL* 12 (2024). [arXiv:2307.03172](https://arxiv.org/abs/2307.03172)
+5. <a name="ref-5"></a>Kwon, W., et al. (2023). Efficient Memory Management for Large Language Model Serving with PagedAttention. *SOSP*. [arXiv:2309.06180](https://arxiv.org/abs/2309.06180)
+6. <a name="ref-6"></a>Jiang, H., et al. (2023). LLMLingua: Compressing Prompts for Accelerated Inference of Large Language Models. *EMNLP*. [arXiv:2310.05736](https://arxiv.org/abs/2310.05736)
+7. <a name="ref-7"></a>Packer, C., et al. (2023). MemGPT: Towards LLMs as Operating Systems. [arXiv:2310.08560](https://arxiv.org/abs/2310.08560)
+8. <a name="ref-8"></a>Park, J., et al. (2023). Generative Agents: Interactive Simulacra of Human Behavior. *UIST*. [arXiv:2304.03442](https://arxiv.org/abs/2304.03442)
+9. <a name="ref-9"></a>Kusupati, A., et al. (2022). Matryoshka Representation Learning. *NeurIPS*. [arXiv:2205.13147](https://arxiv.org/abs/2205.13147) — Sentence-Transformers training guide: [Matryoshka Embeddings](https://sbert.net/examples/sentence_transformer/training/matryoshka/README.html).
+10. <a name="ref-10"></a>QLNI (NODEMIND). *SHADOW-250M-Instruct: 250M-parameter language model with a 100M-token offline disk archive* (two-tier KV cache: 2,048-token full-precision window + 1-bit/320-byte-per-token on-disk archive; trained-in archive retrieval; benchmark harness and raw results shipped in the repo). GitHub: [QLNI/SHADOW-250M-Instruct](https://github.com/QLNI/SHADOW-250M-Instruct); Hugging Face: [NODEMIND/SHADOW-250M](https://huggingface.co/NODEMIND/SHADOW-250M).
+11. <a name="ref-11"></a>Zandieh, A., Daliri, M., Hadian, M., & Mirrokni, V. (2025). TurboQuant: Online Vector Quantization with Near-optimal Distortion Rate. *ICLR 2026*. [arXiv:2504.19874](https://arxiv.org/abs/2504.19874) (OpenReview: [tO3ASKZlok](https://openreview.net/forum?id=tO3ASKZlok))
+12. <a name="ref-12"></a>Guo, D., et al. (2021). GraphCodeBERT: Pre-training Code Representations with Data Flow. *ICLR*. [arXiv:2009.08366](https://arxiv.org/abs/2009.08366)
+13. <a name="ref-13"></a>Chen, J., et al. (2024). M3-Embedding: Multi-Linguality, Multi-Functionality, Multi-Granularity Text Embeddings Through Self-Knowledge Distillation. *Findings of ACL*. [arXiv:2402.03216](https://arxiv.org/abs/2402.03216)
+14. <a name="ref-14"></a>Reimers, N., & Gurevych, I. (2019). Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks. *EMNLP*. [arXiv:1908.10084](https://arxiv.org/abs/1908.10084)
+15. <a name="ref-15"></a>Lloyd, S. (1982). Least Squares Quantization in PCM. *IEEE Transactions on Information Theory*, 28(2). [IEEE Xplore](https://ieeexplore.ieee.org/document/1056489)
+16. <a name="ref-16"></a>Bhargava, Y., et al. (2021). Well-Read Students Learn Better: On the Importance of Pre-training Compact Models. [arXiv:2108.08960](https://arxiv.org/abs/2108.08960)
+17. <a name="ref-17"></a>Gerganov, G. *llama.cpp* — LLM inference in C/C++ with automatic prefix caching and Vulkan backend. [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp)
+18. <a name="ref-18"></a>Wang, W., Wei, F., Dong, L., Bao, H., Yang, N., & Zhou, M. (2020). MiniLM: Deep Self-Attention Distillation for Task-Agnostic Compression of Pre-Trained Transformers. *NeurIPS*. [arXiv:2002.10957](https://arxiv.org/abs/2002.10957) — model card for the default ultra-small drone: [sentence-transformers/paraphrase-MiniLM-L3-v2](https://huggingface.co/sentence-transformers/paraphrase-MiniLM-L3-v2)
+19. <a name="ref-19"></a>Yang, S., Fan, X., Pan, M., Xi, H., Wang, Z., Sun, S., Keutzer, K., Han, S., Zaharia, M., Xu, C., & Stoica, I. (2026). FreeToken: Efficient Edge-Native MoE Serving with Bandwidth-Adaptive Execution. [arXiv:2608.16157](https://arxiv.org/abs/2608.16157) (code: [FlashML-org/FreeToken](https://github.com/FlashML-org/FreeToken))

@@ -10,7 +10,7 @@ performs well over arbitrarily long conversations on consumer hardware.
 
 **HiveBench** is its evaluation suite: unit/integration/benchmark tests, a live
 benchmark harness, and the white paper's falsifiable predictions
-([P1–P12](HIVE-WHITE-PAPER.md#5-hypotheses-and-predictions)) with measured
+([P1–P11](HIVE-WHITE-PAPER.md#5-hypotheses-and-predictions)) with measured
 verdicts.
 
 ## Why Hive
@@ -63,7 +63,7 @@ quality. The head-to-head evidence above is what the claims rest on.*
 | [Decode speed over 308+ turns](HIVE-WHITE-PAPER.md#p1--constant-throughput-hypothesis) (P1) | **Flat** (14.5→15.5 tps, +6.7%) | Slows as context grows, then truncates |
 | [Stated-fact recall](HIVE-WHITE-PAPER.md#p2--retrieval-precision-hypothesis) (P2, deterministic) | **90.3%** | Facts dropped at window limit |
 | [Turns where hive ≥ FIFO](HIVE-WHITE-PAPER.md#p3--context-sufficiency-hypothesis) (P3) | **85.1%** | — |
-| Paired A/B under window pressure (82 turns, live) | **84.1%, ahead once the window drops facts (87.5% vs 82.1% late-turn)** | 84.1% while its window still holds everything |
+| Paired A/B under window pressure (82 turns, live) | **84.1% overall; 87.5% vs 82.1% late-turn, once the window drops facts** | 84.1% while its window still holds everything |
 | Context utilization (p50) | **74.5%** | ~40% (fluff) |
 | Added latency per turn | **~18 ms** | 0 (but loses the facts) |
 | Stability (500-turn run) | **0 OOM**, peak RSS 34.7 MB | — |
@@ -88,7 +88,7 @@ tells you *whether the context you feed the model is the reason it works* — an
 it does it deterministically, offline, and replayably:
 
 - **Falsifiable, not vibes.** The white paper's
-  [P1–P12 predictions](HIVE-WHITE-PAPER.md#5-hypotheses-and-predictions) ship as
+  [P1–P11 predictions](HIVE-WHITE-PAPER.md#5-hypotheses-and-predictions) ship as
   executable tests with measured PASS/FAIL verdicts (§8). Every number in this
   README is reproduced by a command in the repo.
 - **No LLM-as-judge circularity in the evidence path.** The deterministic
@@ -99,7 +99,7 @@ it does it deterministically, offline, and replayably:
   evidence; because it shares the served model's biases, it never constitutes
   it (§9, Threat 1).
 - **The full test suite runs offline in ~30 seconds** — no LLM calls and no API
-  keys; CI-friendly via `--mock`. 400+ tests grouped by what they measure
+  keys; CI-friendly via `--mock`. 500+ tests grouped by what they measure
   (`speed`, `intelligence`, `skills`, `maximum`). (Running the system *live*
   does require a local model backend — LM Studio / llama.cpp — which on most
   rigs means a GPU; the drones themselves stay on CPU.)
@@ -217,5 +217,5 @@ See `docs/INSTALL.md` for the full setup and run guide, and
 
 - **`docs/INSTALL.md`** — full-stack install guide (system + benchmark + studio, fresh machine)
 - **`docs/INTEGRATE.md`** — using hive-memory inside OpenCode, dsh, or your own harness
-- **`HIVE-WHITE-PAPER.md`** — the theory: postulates, falsifiable predictions P1–P12 with measured verdicts (§8), the PES metric (§6), KV-compression landscape (§1.6), threats & limitations (§9)
+- **`HIVE-WHITE-PAPER.md`** — the theory: postulates, falsifiable predictions P1–P11 with measured verdicts (§8), the PES metric (§6), KV-compression landscape (§1.6), threats & limitations (§9)
 - **`HIVE-DIAGRAMS.md`** — visuals and measured charts
