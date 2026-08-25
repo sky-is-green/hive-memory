@@ -72,6 +72,12 @@ FIFO window capped at 1500 tokens to force truncation): at parity overall,
 with strict hive-only wins outnumbering FIFO-only 14:6 once the naive
 window starts dropping facts.
 
+![Context tokens delivered per turn: hive stays flat while unbounded history grows to 33k+ tokens](figures/token_growth.svg)
+
+*Median context tokens per user turn across 721 live turns (two run bundles):
+the hive delivers a flat ~1.2–1.4k-token window regardless of session length,
+while the unbounded history it replaces reaches 33,500+ tokens by turn 40.*
+
 ## Why HiveBench
 
 Most evaluation harnesses tell you how a model performs in a sandbox. HiveBench

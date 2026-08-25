@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="480" font-family="Helvetica,Arial,sans-serif">
+<rect width="920" height="480" fill="white"/>
+<text x="460.0" y="20" text-anchor="middle" font-size="15" fill="#222">Context tokens delivered per user turn (medians across 20+ conversations)</text>
+<line x1="70" y1="434.0" x2="904" y2="434.0" stroke="#ddd" stroke-width="1"/><line x1="70" y1="333.0" x2="904" y2="333.0" stroke="#ddd" stroke-width="1"/><line x1="70" y1="232.0" x2="904" y2="232.0" stroke="#ddd" stroke-width="1"/><line x1="70" y1="131.0" x2="904" y2="131.0" stroke="#ddd" stroke-width="1"/><line x1="70" y1="30.0" x2="904" y2="30.0" stroke="#ddd" stroke-width="1"/><text x="62" y="438.0" text-anchor="end" font-size="12" fill="#555">0</text><text x="62" y="337.0" text-anchor="end" font-size="12" fill="#555">9053</text><text x="62" y="236.0" text-anchor="end" font-size="12" fill="#555">18107</text><text x="62" y="135.0" text-anchor="end" font-size="12" fill="#555">27161</text><text x="62" y="34.0" text-anchor="end" font-size="12" fill="#555">36215</text>
+<line x1="70" y1="434" x2="904" y2="434" stroke="#999"/>
+<line x1="70" y1="30" x2="70" y2="434" stroke="#999"/>
+<polyline fill="none" stroke="#b22222" stroke-width="2.5" points="70.0,433.9 236.8,421.1 403.6,382.5 570.4,321.6 737.2,182.8 904.0,59.9"/>
+<polyline fill="none" stroke="#e28c1e" stroke-width="2.5" points="70.0,433.9 236.8,421.1 403.6,391.5 570.4,389.7 737.2,389.2 904.0,389.2"/>
+<polyline fill="none" stroke="#2e7d32" stroke-width="2.5" points="70.0,434.0 236.8,425.9 403.6,418.6 570.4,420.7 737.2,419.8 904.0,418.4"/>
+<text x="70.0" y="452" text-anchor="middle" font-size="12" fill="#555">1</text><text x="236.8" y="452" text-anchor="middle" font-size="12" fill="#555">2-5</text><text x="403.6" y="452" text-anchor="middle" font-size="12" fill="#555">6-10</text><text x="570.4" y="452" text-anchor="middle" font-size="12" fill="#555">11-20</text><text x="737.2" y="452" text-anchor="middle" font-size="12" fill="#555">21-40</text><text x="904.0" y="452" text-anchor="middle" font-size="12" fill="#555">41+</text>
+<text x="487" y="472" text-anchor="middle" font-size="12" fill="#555">session length (user turns)</text>
+<rect x="636" y="38" width="14" height="4" fill="#b22222"/><text x="656" y="43" font-size="12" fill="#333">unbounded history (grows linearly)</text><rect x="636" y="58" width="14" height="4" fill="#e28c1e"/><text x="656" y="63" font-size="12" fill="#333">FIFO window</text><rect x="636" y="78" width="14" height="4" fill="#2e7d32"/><text x="656" y="83" font-size="12" fill="#333">hive curated context</text>
+</svg>

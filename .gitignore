@@ -84,6 +84,7 @@ reports/
 
 # Rendered paper figures (committed — embedded in the white paper)
 !figures/*.png
+!figures/*.svg
 
 # Generated test data (large synthetic conversations; regenerate via
 # python -m tests.fixtures.synthetic_conversations.generate [--prose|--horizon|--p9])
