@@ -683,6 +683,8 @@ function bubble(role, text, meta) {{
   }}
   log.appendChild(div);
   log.scrollTop = log.scrollHeight;
+  // Cap DOM growth: a long-lived tab must not accumulate every bubble.
+  while (log.children.length > 200) log.removeChild(log.firstChild);
   return div;
 }}
 

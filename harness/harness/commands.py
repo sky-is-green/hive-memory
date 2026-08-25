@@ -13,6 +13,7 @@ the Studio's console commands — same shape, wired to the seams we own
 
 from __future__ import annotations
 
+import html
 import json
 import re
 import time
@@ -89,9 +90,9 @@ def _hive_markdown(st, conversation_id: str) -> list[str]:
     for turn in sorted(by_turn):
         entry = by_turn[turn]
         lines.append(f"## Turn {turn}")
-        lines.append(f"**User:** {entry.get('query', '')}")
+        lines.append(f"**User:** {html.escape(entry.get('query', ''))}")
         if entry.get("reply"):
-            lines.append(f"\n**Assistant:** {entry['reply']}")
+            lines.append(f"\n**Assistant:** {html.escape(entry['reply'])}")
         lines.append("")
     return lines
 
@@ -116,13 +117,13 @@ def _agent_markdown(session_root: Path, conversation_id: str) -> list[str]:
                 text = "".join(b.get("text", "") for b in blocks
                                if isinstance(b, dict) and b.get("type") == "text")
                 if text.strip() and "hive-curated-context" not in text:
-                    lines.append(f"**User:** {text.strip()}\n")
+                    lines.append(f"**User:** {html.escape(text.strip())}\n")
             elif kind == "assistant/message":
                 blocks = record.get("data", {}).get("message", {}).get("content") or []
                 text = "".join(b.get("text", "") for b in blocks
                                if isinstance(b, dict) and b.get("type") == "text")
                 if text.strip():
-                    lines.append(f"**Assistant:** {text.strip()}\n")
+                    lines.append(f"**Assistant:** {html.escape(text.strip())}\n")
     return lines
 
 

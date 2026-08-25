@@ -471,7 +471,21 @@ class LlamaServerManager:
         return {"available": True, "gauges": gauges}
 
     def downloads_status(self) -> list[dict]:
+        self._prune_downloads()
         return [job.to_dict() for job in self._downloads.values()]
+
+    def _prune_downloads(self, keep: int = 20) -> None:
+        """Drop finished/failed jobs beyond the newest ``keep`` — the registry
+        must not grow with every hub download a browser ever started."""
+        with self._lock:
+            finished = sorted(
+                (j for j in self._downloads.values()
+                 if j.state in ("done", "error")),
+                key=lambda j: j.started_at,
+            )
+            excess = max(0, len(finished) - keep)
+            for job in finished[:excess]:
+                self._downloads.pop(job.key, None)
 
     def download(self, repo: str, filename: str) -> dict:
         key = f"{repo}:{filename}"

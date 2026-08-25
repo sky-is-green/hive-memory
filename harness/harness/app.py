@@ -1,9 +1,9 @@
-"""The harness sidecar FastAPI application.
+﻿"""The harness sidecar FastAPI application.
 
 State model
 -----------
 - One ``Hive`` instance per conversation_id (fresh store + comb per
-  conversation — per-conversation isolation is mandatory, HIVE-HANDOFF §6.0 #14).
+  conversation â€” per-conversation isolation is mandatory, HIVE-HANDOFF Â§6.0 #14).
   Instances are created lazily on the first turn and dropped by /v1/hive/reset.
 - Conversations persist to ``state_dir`` (default ./harness_state, one atomic
   JSON per conversation using the same store serialization as the benchmark's
@@ -13,7 +13,7 @@ State model
   would multiply VRAM/RAM for nothing); inference is read-only.
 - Per-conversation locks serialize turns within a conversation; different
   conversations may proceed in parallel. Generation calls are blocking
-  (streaming is a v2 concern) — sync endpoints run in FastAPI's threadpool.
+  (streaming is a v2 concern) â€” sync endpoints run in FastAPI's threadpool.
 - Providers: loaded from providers.local.json at startup (or --providers-file),
   replaceable at runtime via POST /v1/provider/config.
 
@@ -37,6 +37,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
+import psutil
 import requests
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -148,6 +149,12 @@ class _State:
         self.hives: dict[str, Hive] = {}
         self.locks: dict[str, threading.Lock] = {}
         self.global_lock = threading.Lock()
+        # Conversation lifecycle: LRU-bounded so a long-running sidecar cannot
+        # accumulate hives/loggers from every browser session that ever opened.
+        self.max_conversations = int(os.environ.get("HARNESS_MAX_CONVERSATIONS", "50"))
+        self._last_access: dict[str, float] = {}
+        self._inflight: set[str] = set()
+        self._loggers: dict[str, EventLogger] = {}
 
     def ultra(self):
         if self._ultra is None:
@@ -191,7 +198,9 @@ class _State:
 
         A conversation not in memory but present in ``state_dir`` restores
         from disk (same serialization as the benchmark's checkpoint/resume),
-        so the hive survives sidecar restarts.
+        so the hive survives sidecar restarts. In-memory hives are LRU-bounded
+        (``HARNESS_MAX_CONVERSATIONS``); evicted conversations are persisted
+        first and transparently restore on their next touch.
 
         ``with_backend=False`` (the curate/observe flow, where the caller's
         own shell generates) creates the hive without an LLM backend; a
@@ -201,14 +210,19 @@ class _State:
         with self.global_lock:
             hive = self.hives.get(conversation_id)
             if hive is not None:
+                self._last_access[conversation_id] = time.monotonic()
                 return hive
 
             def build(cfg: HiveConfig, backend: object | None) -> Hive:
+                logger = self._loggers.get(conversation_id)
+                if logger is None:
+                    logger = EventLogger(log_dir=self.log_dir)
+                    self._loggers[conversation_id] = logger
                 h = Hive(
                     config=cfg,
                     ultra=self.ultra(),
                     backend=backend,
-                    logger=EventLogger(log_dir=self.log_dir),
+                    logger=logger,
                 )
                 self.hives[conversation_id] = h
                 self.locks.setdefault(conversation_id, threading.Lock())
@@ -225,6 +239,8 @@ class _State:
                         data["store"], embed_fn=hive.ultra.embed
                     )
                     hive.turn = int(data["turn"])
+                    self._last_access[conversation_id] = time.monotonic()
+                    self._evict_locked(exclude=conversation_id)
                     return hive
                 except (ValueError, KeyError, TypeError, OSError) as exc:
                     print(f"harness: restoring {conversation_id} failed ({exc}); "
@@ -243,12 +259,53 @@ class _State:
                     profile = None
                 if profile is not None and profile.sampling:
                     config.sampling = profile.sampling
-            return build(config, self.backend_factory(None) if with_backend else None)
+            hive = build(config, self.backend_factory(None) if with_backend else None)
+            self._last_access[conversation_id] = time.monotonic()
+            self._evict_locked(exclude=conversation_id)
+            return hive
+
+    def _evict_locked(self, exclude: str) -> int:
+        """LRU-evict idle conversations beyond the cap. Caller holds the
+        global lock; in-flight conversations are never evicted, and evicted
+        state is persisted first (restore-on-touch keeps it reachable)."""
+        evicted = 0
+        while len(self.hives) > self.max_conversations:
+            candidates = [cid for cid in self.hives
+                          if cid != exclude and cid not in self._inflight]
+            if not candidates:
+                break
+            oldest = min(candidates, key=lambda c: self._last_access.get(c, 0.0))
+            self.save_conversation(oldest, self.hives[oldest])
+            logger = self._loggers.pop(oldest, None)
+            if logger is not None:
+                try:
+                    logger.close()
+                except Exception:  # noqa: BLE001 - eviction must not fail
+                    pass
+            self.hives.pop(oldest, None)
+            self.locks.pop(oldest, None)
+            self._last_access.pop(oldest, None)
+            evicted += 1
+        return evicted
+
+    def begin(self, conversation_id: str) -> None:
+        self._inflight.add(conversation_id)
+        self._last_access[conversation_id] = time.monotonic()
+
+    def end(self, conversation_id: str) -> None:
+        self._inflight.discard(conversation_id)
 
     def drop(self, conversation_id: str) -> None:
         with self.global_lock:
             self.hives.pop(conversation_id, None)
             self.locks.pop(conversation_id, None)
+            self._last_access.pop(conversation_id, None)
+            logger = self._loggers.pop(conversation_id, None)
+        if logger is not None:
+            try:
+                logger.close()
+            except Exception:  # noqa: BLE001
+                pass
         self.drop_conversation(conversation_id)
 
     def lock_for(self, conversation_id: str) -> threading.Lock:
@@ -407,7 +464,7 @@ class EngineConfigRequest(BaseModel):
 
 
 def _cors_origins() -> list[str]:
-    """Console origins. Default: localhost dev origins only — agent mode can
+    """Console origins. Default: localhost dev origins only â€” agent mode can
     execute code, so blanket CORS (*) is opt-in via HARNESS_CORS_ORIGINS=*."""
     raw = os.environ.get("HARNESS_CORS_ORIGINS", "").strip()
     if raw == "*":
@@ -509,9 +566,11 @@ def create_app(
             new_backend = st.backend_factory(req.model)
             hive.backend = new_backend
             hive.cache = KVCacheManager(new_backend)
+        st.begin(req.conversation_id)
         with st.lock_for(req.conversation_id):
             result = hive.process_turn(req.query, conversation_id=req.conversation_id)
             st.save_conversation(req.conversation_id, hive)
+        st.end(req.conversation_id)
         assembled = result.assembled
         return {
             "conversation_id": req.conversation_id,
@@ -534,7 +593,7 @@ def create_app(
 
     # ------------------------------------------------------------------
     # Curate / observe (Seam A, dsh-hive flow): the caller's own shell
-    # generates — the sidecar only assembles context and ingests replies.
+    # generates â€” the sidecar only assembles context and ingests replies.
     @app.post("/v1/hive/curate")
     def hive_curate(req: CurateRequest):
         query = (req.query or "").strip()
@@ -570,9 +629,11 @@ def create_app(
         if reply and not (
             hive.config.filter_hedge_replies and Hive._is_hedge_reply(reply)
         ):
+            st.begin(req.conversation_id)
             with st.lock_for(req.conversation_id):
                 hive.store.add_chunk(hive.turn, reply)
                 st.save_conversation(req.conversation_id, hive)
+            st.end(req.conversation_id)
             stored = True
         return {"ok": True, "stored": stored, "turn": hive.turn}
 
@@ -594,9 +655,11 @@ def create_app(
         headers = {"Authorization": f"Bearer {provider.api_key or 'lm-studio'}",
                    **provider.extra_headers}
         hive = st.hive_for(req.conversation_id, req.config, with_backend=False)
+        st.begin(req.conversation_id)
         with st.lock_for(req.conversation_id):
             result = hive.process_turn(query, conversation_id=req.conversation_id)
             st.save_conversation(req.conversation_id, hive)
+        st.end(req.conversation_id)
         assembled = result.assembled
         curated = assembled.content if assembled is not None else ""
         payload = {
@@ -673,7 +736,7 @@ def create_app(
 
     @app.get("/v1/hive/defaults")
     def hive_defaults():
-        """HiveConfig defaults — the source for the UI tuning form. Overrides
+        """HiveConfig defaults â€” the source for the UI tuning form. Overrides
         ride each turn request's `config` and apply when a conversation is
         created (reset to re-tune)."""
         return HiveConfig().to_dict()
@@ -728,8 +791,8 @@ def create_app(
     # Built-in mock OpenAI-compatible chat completions: pairs with
     # `python -m harness --mock` so a dsh shell (pi-ai openai-completions
     # route) can run end-to-end offline. The reply deterministically echoes
-    # what the request actually contained — context size and whether hive
-    # content reached the model — which makes it a live probe of Seam A.
+    # what the request actually contained â€” context size and whether hive
+    # content reached the model â€” which makes it a live probe of Seam A.
     # When the conversation asks for the benchmark, it emits a proper
     # hive_bench_run tool call and then acknowledges the tool result, so the
     # full agent loop (request -> tool_call -> tool/result -> answer) is
@@ -791,7 +854,7 @@ def create_app(
             str(m.get("content") or "") for m in messages if m.get("role") == "user"
         ).lower()
         if "hive_bench" in user_text or "benchmark" in user_text \
-                or "p1-p11" in user_text or "p1–p11" in user_text:
+                or "p1-p11" in user_text or "p1â€“p11" in user_text:
             match = re.search(r"(\d+)\s+conv", user_text)
             max_convs = int(match.group(1)) if match else 2
             return {"tool_call": (
@@ -892,7 +955,7 @@ def create_app(
         return StreamingResponse(sse(), media_type="text/event-stream")
 
     # ------------------------------------------------------------------
-    # Real OpenAI-compatible passthrough (curated) — Mode A integration
+    # Real OpenAI-compatible passthrough (curated) â€” Mode A integration
     # (OpenCode, dsh, any OpenAI client): standard /chat/completions wire
     # shape, curated system context, the reply observed back into the
     # store. Conversation key: X-Hive-Conversation header > payload "user"
@@ -1001,7 +1064,7 @@ def create_app(
         for entry in req.providers:
             data = entry.model_dump()
             if data.get("api_key") == MASK:
-                # the UI echoes the mask back for untouched keys — keep the
+                # the UI echoes the mask back for untouched keys â€” keep the
                 # stored secret instead of overwriting it with "***"
                 previous = [p for p in st.registry.providers
                             if p.name.lower() == str(data.get("name", "")).lower()]
@@ -1024,7 +1087,7 @@ def create_app(
         for entry in req.providers:
             data = entry.model_dump()
             if data.get("api_key") == MASK:
-                # the UI echoes the mask back for untouched keys — keep the
+                # the UI echoes the mask back for untouched keys â€” keep the
                 # stored secret instead of overwriting it with "***"
                 previous = [p for p in st.registry.providers
                             if p.name.lower() == str(data.get("name", "")).lower()]
@@ -1201,6 +1264,22 @@ def create_app(
     @app.get("/v1/server/log")
     def server_log(tail: int = 120):
         return {"lines": models_manager.server_log(tail)}
+
+    @app.get("/v1/server/memory")
+    def server_memory():
+        """Sidecar RSS + conversation accounting — the leak-detection probe."""
+        import psutil
+
+        proc = psutil.Process()
+        rss_mb = proc.memory_info().rss / (1024 * 1024)
+        return {
+            "rss_mb": round(rss_mb, 1),
+            "conversations_in_memory": len(st.hives),
+            "max_conversations": st.max_conversations,
+            "loggers": len(st._loggers),
+            "downloads": len(models_manager._downloads),
+            "threads": threading.active_count(),
+        }
 
     @app.get("/v1/server/metrics")
     def server_metrics():
