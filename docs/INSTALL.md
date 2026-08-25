@@ -6,12 +6,16 @@ sidecar (`harness/`). ~5 minutes to a verified install.
 
 ## 1. Prerequisites
 
-- **Python 3.10â€“3.14** (`python --version`; 3.14 verified on Windows)
+- **Python 3.10-3.14** (`python --version`; 3.14 verified on Windows)
 - **git**
-- A local LLM backend, **one of**:
-  - **LM Studio** (recommended) - OpenAI-compatible server on `localhost:1234`
-  - a **GGUF library** in `models/gguf/` - the studio auto-starts `llama-server`
-    from `tools/llama.cpp/` (Vulkan; works on AMD, no NVIDIA required)
+- A local LLM backend, **one of** (in order of least dependency):
+  1. **Managed llama.cpp** *(default - nothing else to install)*: drop GGUF
+     files into `models/gguf/`; the studio auto-starts `llama-server`
+     (Vulkan - works on AMD, no NVIDIA/CUDA required)
+  2. **LM Studio** - convenient front-end on `localhost:1234` if you already
+     use it
+  3. **Hosted APIs** - any OpenAI-compatible provider via
+     `providers.local.json` (DeepSeek, OpenRouter, ...)
 - Optional: GPU (not required - the drones run on CPU)
 
 ## 2. Get the repo
