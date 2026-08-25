@@ -2,10 +2,11 @@
 
 All offline: the llama-server process is a fake spawned-command recorder, the
 health prober is injectable, and the HF download implementation is monkey-
-patched â€” no binary, GPU, or network needed.
+patched — no binary, GPU, or network needed.
 """
 
 import json
+import os
 import socket
 import threading
 import time
@@ -113,7 +114,9 @@ def test_backend_binary_resolution(tmp_path, monkeypatch):
     assert mm._binary_for_backend("") is None
     assert mm._binary_for_backend(None) is None
 
-    exe = tmp_path / "tools" / "backends" / "rocm" / "llama-server.exe"
+    # the backend binary uses the platform's llama-server name (models.py)
+    exe_name = "llama-server.exe" if os.name == "nt" else "llama-server"
+    exe = tmp_path / "tools" / "backends" / "rocm" / exe_name
     exe.parent.mkdir(parents=True)
     exe.write_bytes(b"x")
     assert mm._binary_for_backend("rocm") == exe
@@ -124,7 +127,9 @@ def test_load_uses_backend_binary(tmp_path, monkeypatch):
     import harness.models as mm
 
     monkeypatch.setattr(mm, "REPO_ROOT", tmp_path)
-    rocm_exe = tmp_path / "tools" / "backends" / "rocm" / "llama-server.exe"
+    # the backend binary uses the platform's llama-server name (models.py)
+    rocm_exe = tmp_path / "tools" / "backends" / "rocm" / (
+        "llama-server.exe" if os.name == "nt" else "llama-server")
     rocm_exe.parent.mkdir(parents=True)
     rocm_exe.write_bytes(b"x")
 
