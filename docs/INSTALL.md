@@ -86,10 +86,10 @@ keys** (the suite is fully offline; `--mock` mode covers CI).
 
 `--setup` copies `providers.example.json` → `providers.local.json`, checks for a
 reachable backend, **pre-downloads the default drone** (`paraphrase-MiniLM-L3-v2`,
-~60 MB from Hugging Face — automatic on first live use either way), and prints
+~60 MB from Hugging Face, automatic on first live use either way), and prints
 the next command. The studio serves an OpenAI-compatible endpoint
 (`http://127.0.0.1:8765/v1/chat/completions`) that curates every conversation
-through the hive — this is the integration point for other harnesses (see
+through the hive, this is the integration point for other harnesses (see
 `docs/INTEGRATE.md`).
 
 ## 7. Agent mode (optional - the dsh harness brain)
@@ -124,7 +124,7 @@ management) still works.
 .\.venv\Scripts\python -m experiments.paired_ab --live --model prism-ml/bonsai-27b --max-convs 2 --max-turns 45 --confidence off --max-tokens 120 --no-thinking --checkpoint-every 2 --output runs/paired_ab_prose.json --checkpoint runs/paired_ab_prose.ckpt.json
 ```
 
-See `HIVE-HANDOFF.md` Â§9 (live benchmark) and Â§15 (command cheat sheet) for the
+See `HIVE-HANDOFF.md` §9 (live benchmark) and §15 (command cheat sheet) for the
 full run matrix.
 
 ## 9. Troubleshooting

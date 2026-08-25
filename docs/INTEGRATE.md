@@ -2,10 +2,10 @@
 
 hive-memory is an **external** context-curation layer: it wraps your existing
 LLM backend and curates every conversation into a bounded, high-relevance
-context window. It does not replace your harness — it sits in front of the
+context window. It does not replace your harness; it sits in front of the
 model. Three integration modes, from zero-code to deep.
 
-## Mode A — OpenAI-compatible swap (zero code, minutes)
+## Mode A: OpenAI-compatible swap (zero code, minutes)
 
 Start the studio once; it serves a real OpenAI-compatible endpoint that curates
 every request through the hive:
@@ -18,8 +18,8 @@ every request through the hive:
 `POST /v1/openai/chat/completions` is a genuine passthrough: it curates the
 turn, prepends the curated context to the leading system message, forwards the
 request to your provider, and observes the reply back into the conversation
-store. (The older `/v1/chat/completions` endpoint is the **mock** demo path —
-canned replies, not real model output — do not point a client at it.)
+store. (The older `/v1/chat/completions` endpoint is the **mock** demo path:
+canned replies, not real model output; do not point a client at it.)
 
 Any client that accepts a `baseURL` + model id can use it. The API key is
 ignored locally (send anything, e.g. `lm-studio`). Conversations are keyed by
@@ -29,7 +29,7 @@ the `X-Hive-Conversation` header, then the payload's `user` field, then
 ### OpenCode
 
 Copy `docs/opencode.hive.example.json` → `opencode.json` (project root or
-`~/.config/opencode/`), then restart opencode — config is loaded once at
+`~/.config/opencode/`), then restart opencode; config is loaded once at
 startup:
 
 ```json
@@ -57,7 +57,7 @@ startup:
 Select the model with `/models` (or set `model` in config). The model id must
 be one the studio's backend can serve (list them at
 `http://127.0.0.1:8765/v1/models`). `"tool_call": true` declares the model can
-emit tool calls — opencode needs this to edit files/run commands. Drop it if
+emit tool calls, opencode needs this to edit files/run commands. Drop it if
 your backend errors on tool calls. For a multi-project setup, give each
 project its own `X-Hive-Conversation` header so stores stay isolated.
 
@@ -77,7 +77,7 @@ an api key of `lm-studio`. The studio passes sampling parameters through
   on models that burn output on hidden CoT (see `docs/INSTALL.md` §8).
 - Watch it curate in real time: `GET /v1/hive/state` (or the studio UI).
 
-## Mode B — Python facade (build your own)
+## Mode B, Python facade (build your own)
 
 The system is a normal pip package with one import surface:
 
@@ -97,29 +97,29 @@ print(result.assembled)      # exactly what the model saw (content + token budge
 
 Per-conversation isolation is manual: call `hive.reset_conversation()` between
 conversations (one store per conversation). Any OpenAI-compatible backend works
-(`OpenAICompatBackend`), including hosted providers — keys live in
+(`OpenAICompatBackend`), including hosted providers, keys live in
 `providers.local.json` (gitignored) or the `HARNESS_PROVIDERS_FILE` env var.
 `hive/` never imports from the bench or the studio, so it drops into any
 project cleanly.
 
-## Mode C — dsh plugin (deepest integration)
+## Mode C, dsh plugin (deepest integration)
 
 For the dsh fork (`deepseek-harness`, pinned `b150a551b8`), the harness spec
-defines a full plugin contract — see `HARNESS-SPEC.md` §3.1:
+defines a full plugin contract; see `HARNESS-SPEC.md` §3.1:
 
-1. The plugin listens at **`agent/pre-step`** — the documented extension point
+1. The plugin listens at **`agent/pre-step`**: the documented extension point
    for "decides what the model sees".
 2. It calls the sidecar `POST /v1/hive/turn` with
    `{query, conversation_id, model?}` and rewrites the system prompt with the
-   curated context (single leading system message — strict chat templates
+   curated context (single leading system message, strict chat templates
    require it).
 3. Model adapters register through **`ctx.llm`**, so the curated context flows
    through the same seam as any provider.
 4. The session log (`SessionEventMap`) is the evaluation record: task prompts,
-   steps, tool calls, outcomes — agentic completion can be scored from it.
+   steps, tool calls, outcomes, agentic completion can be scored from it.
 
 `setup.ps1` automates the whole dsh toolchain on a fresh machine (fork build,
-node carrier, SDK editable installs, llama-server) — run it once, then
+node carrier, SDK editable installs, llama-server), run it once, then
 `python -m harness`.
 
 ## Config & gotchas
@@ -135,12 +135,12 @@ node carrier, SDK editable installs, llama-server) — run it once, then
 
 | Quirk | What you'll see | What to do |
 |---|---|---|
-| **Hidden chain-of-thought** | qwen3.8/gemma-4 variants ignore `enable_thinking=false` and burn the output budget on hidden reasoning — empty replies under small caps, multi-minute turns | Use a non-reasoning model (bonsai-27b honors the flag) or toggle thinking off in the LM Studio GUI |
-| **Strict chat templates** | The model rejects a system message that isn't first | The studio always merges curated context into the leading system message — keep client system messages first too |
+| **Hidden chain-of-thought** | qwen3.8/gemma-4 variants ignore `enable_thinking=false` and burn the output budget on hidden reasoning, empty replies under small caps, multi-minute turns | Use a non-reasoning model (bonsai-27b honors the flag) or toggle thinking off in the LM Studio GUI |
+| **Strict chat templates** | The model rejects a system message that isn't first | The studio always merges curated context into the leading system message, keep client system messages first too |
 | **Tool calls** | Some GGUFs/backends error on `tools:` payloads | Set `tool_call: false` (or drop it) in the client model config; opencode then goes text-only |
 | **Single-slot servers** | Requests queue; concurrency doesn't speed up | Raise llama.cpp `-np`/LM Studio parallel slots for multi-request workloads |
 | **`max_tokens` is a ceiling, not a target** | Small caps truncate replies (or yield nothing on thinking models) | Keep 400+ tokens for normal turns; the hive's generation headroom reserves 2048 |
 | **Prefix caching** | TTFT grows with context when the pinned prefix changes | Keep the studio's pinned prefix stable; don't rewrite the leading system message yourself |
 | **Conversation isolation** | One store per conversation id; shared ids bleed context | Always set `X-Hive-Conversation` (or `user`) per project/session |
 | **API key is cosmetic locally** | Any string works against LM Studio | Use real keys in `providers.local.json` only for hosted providers |
-| **Context window size** | Windows ≥8k verified; the hive's budget (1–6k) never binds | Nothing to do — the budget is inside any modern window |
+| **Context window size** | Windows ≥8k verified; the hive's budget (1-6k) never binds | Nothing to do, the budget is inside any modern window |
