@@ -11,7 +11,12 @@ sidecar (`harness/`). ~5 minutes to a verified install.
 - A local LLM backend, **one of** (in order of least dependency):
   1. **Managed llama.cpp** *(default - nothing else to install)*: drop GGUF
      files into `models/gguf/`; the studio auto-starts `llama-server`
-     (Vulkan - works on AMD, no NVIDIA/CUDA required)
+     - **Selectable GPU backends**: `vulkan` (default, works on AMD/NVIDIA/
+       Intel), `rocm` (AMD HIP), `cuda`, `cpu` - fetch with
+       `tools/fetch_backend.ps1 -Backend rocm`, then launch with
+       `POST /v1/server/start {"backend": "rocm", ...}`.
+       Actively tested: vulkan + rocm on an RX 7900 XT; cuda/sycl selectable
+       but untested here.
   2. **LM Studio** - convenient front-end on `localhost:1234` if you already
      use it
   3. **Hosted APIs** - any OpenAI-compatible provider via
