@@ -33,6 +33,11 @@ class HiveConfig:
     confidence_mode: str = "mcdropout"  # mcdropout | single | off
     # --- security ---
     sanitize_context: bool = True
+    # store-time hygiene (retention.store.sanitize_for_storage): redact
+    # credential-shaped strings / base64 blobs and cap chunk length before
+    # anything reaches the store, checkpoints, or comb archives
+    strip_secrets: bool = True
+    max_chunk_chars: int = 4000
     # --- focal ---
     generation_headroom: int = 2048
     max_context: int = 8192

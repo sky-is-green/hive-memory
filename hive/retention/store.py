@@ -8,11 +8,62 @@ optional ``embed_fn`` provides embeddings lazily (used by dedup/assembly).
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from cortex.baselines.metrics import now_iso
+
+# ---------------------------------------------------------------------------
+# Store-time hygiene (U2): credentials and oversized blobs must not reach the
+# persistent tiers (active store -> checkpoints -> comb SSD archives), where
+# they would survive indefinitely and be re-injected into future prompts.
+# Applied inside add_chunk(), BEFORE fingerprinting, so dedup groups the
+# sanitized form and every downstream consumer inherits clean data.
+# ---------------------------------------------------------------------------
+
+_SECRET_RULES = (
+    # OpenAI-style keys (sk- followed by 16+ key characters)
+    (re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"), "[redacted-secret]"),
+    # GitHub tokens (ghp_/gho_/ghu_/ghs_/ghr_)
+    (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"), "[redacted-secret]"),
+    # AWS access key IDs
+    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "[redacted-secret]"),
+    # Bearer/Authorization header values (keep the label, drop the secret)
+    (
+        re.compile(
+            r"(?i)\b(authorization\s*[:=]\s*)bearer\s+[A-Za-z0-9._~+/=-]+"
+        ),
+        r"\1[redacted]",
+    ),
+    # key=value style assignments for common secret field names (quoted and
+    # bare forms; the quotes go with the redacted value)
+    (
+        re.compile(
+            r"(?i)\b(api[_-]?key|apikey|passwd|password|secret|token)"
+            r"(\s*[:=]\s*)(\"[^\"]{4,}\"|'[^']{4,}'|[^\s,;\"']{4,})"
+        ),
+        r"\1\2[redacted]",
+    ),
+)
+
+_BASE64_BLOB = re.compile(r"[A-Za-z0-9+/]{256,}={0,2}")
+
+TRUNCATION_MARK = "\n…[truncated]"
+DEFAULT_MAX_CHUNK_CHARS = 4000
+
+
+def sanitize_for_storage(text: str, max_chars: int = DEFAULT_MAX_CHUNK_CHARS) -> str:
+    """Redact credential-shaped strings, collapse base64 blobs, and enforce a
+    hard length cap. Deterministic on normal prose: text without matches and
+    within ``max_chars`` passes through byte-identical."""
+    for pattern, replacement in _SECRET_RULES:
+        text = pattern.sub(replacement, text)
+    text = _BASE64_BLOB.sub("[base64 blob stripped]", text)
+    if len(text) > max_chars:
+        text = text[:max_chars] + TRUNCATION_MARK
+    return text
 
 
 @dataclass
@@ -50,6 +101,8 @@ class ContextStore:
         max_chunks: Optional[int] = None,
         comb=None,
         comb_relevant_only: bool = True,
+        sanitize: bool = True,
+        max_chunk_chars: int = DEFAULT_MAX_CHUNK_CHARS,
     ) -> None:
         self.chunks: dict[str, ContextChunk] = {}
         self.turn_index: dict[int, list[str]] = {}
@@ -58,8 +111,12 @@ class ContextStore:
         self.max_chunks = max_chunks
         self.comb = comb
         self.comb_relevant_only = comb_relevant_only
+        self.sanitize = sanitize
+        self.max_chunk_chars = max_chunk_chars
 
     def add_chunk(self, turn: int, content: str, chunk_id: Optional[str] = None) -> str:
+        if self.sanitize:
+            content = sanitize_for_storage(content, self.max_chunk_chars)
         fingerprint = hashlib.md5(content.encode("utf-8")).hexdigest()[:12]
         cid = chunk_id or hashlib.md5(f"{turn}:{content}".encode("utf-8")).hexdigest()[:12]
         self.chunks[cid] = ContextChunk(

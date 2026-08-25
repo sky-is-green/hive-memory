@@ -130,12 +130,14 @@ def test_comb_prunes_unreferenced_records_by_age(tmp_path):
 
 def test_stale_out_skips_never_curated_chunks(tmp_path):
     hive = _hive(tmp_path)
-    # a chunk too large to ever fit the budget is never selected — and
+    # a chunk too large to ever fit the budget is never selected - and
     # selection-as-curation means it never carries relevance history, so it is
     # never archived even when it ages past the stale wall. (The greedy budget
     # fill selects everything on a small store, so a short chunk WOULD be
-    # curated on early turns — that is the intended surplus-tier semantics.)
-    raw = hive.store.add_chunk(1, "the HOTTERM spec says refresh every hour. " + "x" * 4000)
+    # curated on early turns - that is the intended surplus-tier semantics.)
+    # Prose filler, not a character run: store-time hygiene (U2) collapses
+    # long base64-shaped runs, which would shrink this below the budget.
+    raw = hive.store.add_chunk(1, "the HOTTERM spec says refresh every hour. " + "lorem ipsum dolor sit amet " * 300)
     _fill_store(hive)
     for _ in range(25):
         hive.process_turn("what is the OTHERTHING config", record_exchange=False)

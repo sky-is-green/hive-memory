@@ -142,9 +142,13 @@ class Hive:
                 max_chunks=self.config.max_chunks,
                 comb=self.comb,
                 comb_relevant_only=self.config.comb_relevant_only,
+                sanitize=self.config.strip_secrets,
+                max_chunk_chars=self.config.max_chunk_chars,
             )
         return ContextStore(
-            embed_fn=self.ultra.embed, max_chunks=self.config.max_chunks
+            embed_fn=self.ultra.embed, max_chunks=self.config.max_chunks,
+            sanitize=self.config.strip_secrets,
+            max_chunk_chars=self.config.max_chunk_chars,
         )
 
     # ------------------------------------------------------------------
