@@ -125,3 +125,7 @@ Thumbs.db
 .idea/
 *.swp
 *~
+
+# Local agent-tool config (machine-specific)
+.opencode/
+opencode.json
