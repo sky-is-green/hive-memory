@@ -311,12 +311,14 @@ class Hive:
         ).composite
 
         self._log(query, assembled, report, level, timings, conversation_id)
-        return TurnResult(
+        result = TurnResult(
             turn=self.turn, query=query, reply=reply, assembled=assembled,
             timings=timings, congestion=report, degradation_level=level,
             mode=mode, pes=round(pes, 2), token_count=token_count,
             budget=budget, error=error,
         )
+        self._last_turn_result = result  # for the prompt inspector
+        return result
 
     # ------------------------------------------------------------------
     # Refusal/hedge detection. Implementation lives in cortex.hedges
@@ -349,6 +351,49 @@ class Hive:
             return False
         qwords = {w for w in Hive._WORD_RE.findall(query.lower())}
         return len(cwords & qwords) / len(cwords) >= 0.8
+
+    def inspect_turn(self, result: TurnResult) -> dict:
+        """Full per-turn curation detail for the prompt inspector.
+
+        Surfaces what the model actually received (and what it didn't) so
+        the curation pipeline is debuggable without reading NDJSON logs.
+        """
+        a = result.assembled
+        if a is None:
+            return {"mode": result.mode, "error": result.error or "no assembly"}
+        all_chunks = {c.id: c for c in self.store.all_chunks()}
+        selected_ids = set(a.selected_chunk_ids or [])
+        selected, dropped = [], []
+        for cid, score in sorted((a.raw_scores or {}).items(),
+                                 key=lambda kv: kv[1], reverse=True):
+            chunk = all_chunks.get(cid)
+            preview = (chunk.content[:200] + "…" if chunk and len(chunk.content) > 200
+                       else chunk.content if chunk else "(evicted)")
+            entry = {"id": cid, "raw_score": round(score, 3),
+                     "selected": cid in selected_ids, "preview": preview}
+            if cid in selected_ids:
+                selected.append(entry)
+            else:
+                dropped.append(entry)
+        route = a.routing_decision
+        return {
+            "mode": result.mode,
+            "turn": result.turn,
+            "query": result.query,
+            "routing": {"route_to": route.route_to if route else "unknown"},
+            "drift_detected": a.drift_detected,
+            "budget": {"total": a.budget, "used": a.token_count,
+                       "utilization": round(a.token_count / max(a.budget, 1), 3)},
+            "top_raw_score": round(a.top_raw_score, 3),
+            "selected_chunks": selected,
+            "dropped_chunks": dropped[:20],
+            "dropped_count": len(dropped),
+            "store_chunks": len(all_chunks),
+            "assembled_preview": (a.content[:500] + "…"
+                                  if len(a.content) > 500 else a.content),
+            "timings": {k: round(v, 1) for k, v in (result.timings or {}).items()
+                        if isinstance(v, (int, float))},
+        }
 
     def _fifo_context(self, query: str) -> str:
         history = [{"role": "user", "content": c.content} for c in self.store.all_chunks()]

@@ -258,12 +258,15 @@ _SERVER_CSS = _CSS + """
  h1 { margin: 0 0 .7rem 0; flex: none; }
  section { background: #fff; border-radius: 8px; padding: 1rem 1.4rem;
            margin: 0 0 1rem 0; box-shadow: 0 1px 3px rgba(16,32,48,.08); }
+ /* three panes in fixed proportion — sides 1 part, chat 1.4 parts.
+     Pure fr tracks: every pane keeps its share of the row at ANY
+     viewport width, and each pane scrolls internally instead of
+     forcing the others wider or narrower. */
  .grid { display: grid;
-         grid-template-columns: minmax(320px, 1fr) minmax(420px, 1.3fr)
-                                minmax(340px, 1fr);
+         grid-template-columns: 1fr 1.4fr 1fr;
          gap: 1rem; align-items: stretch;
          flex: 1 1 auto; min-height: 0; }
- @media (max-width: 1150px) {
+ @media (max-width: 900px) {
     /* stacked layout: the page scrolls again and the chat pane keeps the
        lion's share of the height instead of being squeezed into a sliver */
     body { overflow-y: auto; }
@@ -309,6 +312,14 @@ _SERVER_CSS = _CSS + """
         font-size: .8rem; padding: .25rem .7rem; border-radius: 999px; }
  #chatin { flex: 1; }
  #stopbtn { background: #b3372c; color: #fff; border: none; }
+ /* inspector */
+ .inspector-list { max-height: 300px; overflow-y: auto; }
+ .chunkrow { background: #fff; border: 1px solid #e3eaf1; border-radius: 6px;
+        padding: .45rem .7rem; margin: .3rem 0; font-size: .85rem; }
+ .chunkrow.sel { border-left: 3px solid #157a3e; }
+ .chunkrow.drop { border-left: 3px solid #d4d9de; opacity: .7; }
+ .chunkrow .score { float: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+ .chunkrow .preview { color: #456; margin-top: .2rem; word-break: break-word; }
  /* settings tabs */
  .tabs { display: flex; gap: .25rem; margin-bottom: .6rem; }
  .tab { border: 1px solid #cfd8e0; background: #eef2f6;
@@ -351,10 +362,24 @@ _SERVER_CSS = _CSS + """
    box-shadow: 0 4px 14px rgba(0, 0, 0, .28); }
   .hint:hover::after, .hint:focus::after {
     opacity: 1; visibility: visible; transform: none; }
- /* chat pane fills its column; the composer rides the bottom edge */
+ /* chat pane: one flex column filling its card; transcript grows,
+    every other row stays fixed */
+ .chatpane { flex: 1 1 auto; min-height: 0; display: flex;
+             flex-direction: column; }
+ .mid .chatpane { margin-bottom: 0; padding-bottom: .9rem; }
  .chatpane .chatlog { flex: 1 1 auto; height: auto; min-height: 220px;
-                      margin-bottom: .5rem; }
- .composer { margin-top: auto; }
+                      margin-bottom: .6rem; }
+ .chat-head { display: flex; justify-content: space-between;
+              align-items: center; gap: .6rem; flex: none;
+              margin: .2rem 0 .6rem; }
+ .chat-head h2 { margin: 0; font-size: 1.05rem; white-space: nowrap; }
+ .chat-controls { display: flex; align-items: center; gap: .45rem;
+                  flex-wrap: wrap; justify-content: flex-end; }
+ .composer { display: flex; gap: .4rem; align-items: center;
+             margin-top: auto; flex: none; }
+ .composer-input { flex: 1 1 auto; display: flex; min-width: 0; }
+ .composer-input input { width: 100%; min-width: 0; flex: 1; }
+ #stopbtn { display: none; }
  /* OpenCode-style session tabs */
  .sesstabs { display: flex; gap: .3rem; flex-wrap: wrap; margin: 0 0 .5rem; }
  .sesstab { border: 1px solid #cfd8e0; background: #eef2f6;
@@ -391,13 +416,25 @@ _SERVER_CSS = _CSS + """
  #stopbtn { background: #b3372c; color: #fff; border: none; }
  pre { background: #fff8ec; color: #000000; border: 1.2px solid #FB8500; }
  .chatlog { background: #fffdf7; border: 1.2px solid #FB8500; }
- .msg.user { background: #000000; color: #FFDD00; }
- .msg.ai { background: #ffffff; border: 1.2px solid #FB8500; }
+ .msg { transition: box-shadow .15s ease; }
+ .msg.user { background: #000000; color: #FFDD00;
+             box-shadow: 0 6px 16px rgba(0,0,0,.55),
+                         0 0 0 2px #FFDD00,
+                         0 0 20px rgba(0,0,0,.30); }
+ .msg.ai { background: #ffffff; border: 1.2px solid #FB8500;
+           box-shadow: 0 6px 16px rgba(251,133,0,.45),
+                       0 0 18px rgba(251,133,0,.30); }
  .msg.sys { background: rgba(0,0,0,.08); color: #000000; }
  .tab { border-color: #FB8500; border-width: 1.2px; background: #ffe9c8; color: #000; }
  .tab.active { background: #ffffff; border-bottom-color: #ffffff; }
- .sesstab { border-color: #FB8500; border-width: 1.2px; background: #ffe9c8; color: #000; }
- .sesstab.active { background: #000000; border-color: #000000; color: #FFDD00; }
+ .sesstab { border-color: #FB8500; border-width: 1.2px; background: #ffe9c8; color: #000;
+            transition: box-shadow .15s ease, transform .15s ease; }
+ .sesstab:hover { transform: translateY(-1px); }
+ .sesstab.active { background: #000000; border-color: #000000; color: #FFDD00;
+                   transform: translateY(-2px);
+                   box-shadow: 0 6px 16px rgba(0,0,0,.55),
+                               0 0 0 2.5px #FFDD00,
+                               0 0 24px rgba(0,0,0,.30); }
  .hint { background: #ffffff; color: #553300; border-color: #7a4a00; }
  .toolstep { background: #ffffff; border: 1.2px dashed #FB8500; }
  """
@@ -440,8 +477,7 @@ def render_server_page() -> str:
 <label class="inline">ctx {tip('Context window in tokens llama-server serves; caps prompt + reply together.')} <input id="ctx" type="number" value="8192" size="4"></label>
 <label class="inline">gpu {tip('Model layers offloaded to the GPU. 999 = every layer (needs enough VRAM); lower it if you run out.')} <input id="ngl" type="number" value="999" size="3"></label>
 <label class="inline">api-key {tip('Bearer token llama-server expects on requests; leave blank when none is set.')} <input id="l-apikey" size="10" placeholder="(none)"></label><br>
-<span class="sugwrap"><input id="hfrepo" placeholder="--hf-repo (type to search)" size="30"
-       list="repo-suggestions">
+<span class="sugwrap"><input id="hfrepo" placeholder="--hf-repo (type to search)" size="30">
 <div class="sugbox" id="sug-hfrepo"></div></span>
 <input id="hffile" placeholder="--hf-file" size="18">{tip('Hugging Face source: repo id plus the exact GGUF filename inside it.')}
 <button onclick="startServer()">Start</button></div>
@@ -571,46 +607,69 @@ providers.local.json (gitignored).</div>
 
 <!-- ==================== MIDDLE: loaded AI chat ==================== -->
 <div class="col mid">
-<section class="chatpane" style="display:flex; flex-direction:column; flex:1 1 auto; min-height:0;">
+<section class="chatpane">
 <div id="sess-tabs" class="sesstabs"></div>
-<div class="row" style="display:flex; justify-content:space-between; align-items:center;">
-<h2 style="margin:0" id="chat-title">Loaded model</h2>
-<div>
+<div class="chat-head">
+<h2 id="chat-title">Loaded model</h2>
+<div class="chat-controls">
 <span class="modesel">
 <label class="inline">model <select id="chat-provider" onchange="saveConvProvider(this.value)" title="Inference target for this conversation"></select></label>
-<label class="inline"><input type="radio" name="chatmode" value="hive" checked> Hive {tip('Curated generation: the hive assembles the context, then generates directly.')} </label>
+<label class="inline"><input type="radio" name="chatmode" value="hive" checked> Hive {tip('Curated generation: the hive assembles the context, then generates directly.')}</label>
 <label class="inline"><input type="radio" name="chatmode" value="agent"> Agent (dsh) {tip('The full DeepSeek Harness agent loop — tools, multi-step turns, session log — pointed at the loaded model.')}</label>
 </span>
-<button onclick="newConversation()">{tip('Opens a fresh session tab; the current one stays in the tab strip.')}New conversation</button></div>
+<button onclick="newConversation()">New conversation</button>{tip('Opens a fresh session tab; the current one stays in the tab strip.')}
+</div>
+</div>
 <div id="chatlog" class="chatlog"></div>
-<div class="row composer" style="display:flex; gap:.4rem;">
-<span class="sugwrap" style="flex:1; display:flex;"><input id="chatin" placeholder="Talk to the loaded AI…  (/ for commands)" style="flex:1;"
+<div class="composer">
+<span class="sugwrap composer-input"><input id="chatin" placeholder="Talk to the loaded AI…  (/ for commands)"
        onkeydown="if (event.key === 'Enter') chatSubmit()" autocomplete="off">
 <div class="sugbox" id="sug-chat"></div></span>
 <button id="sendbtn" onclick="chatSubmit()">Send</button>
-<button id="stopbtn" style="display:none" onclick="cancelAgent()">Stop</button><button id="savebtn" onclick="saveSession()">Save session</button>{tip('Name and keep this session as a tab. Tabs and transcripts survive page reloads.')}</div>
+<button id="stopbtn" onclick="cancelAgent()">Stop</button>
+<button id="savebtn" onclick="saveSession()">Save session</button>{tip('Name and keep this session as a tab. Tabs and transcripts survive page reloads.')}
+<button onclick="newConversation()">+ New session</button>{tip('Opens a fresh session tab right away; the current one stays in the tab strip.')}
+</div>
 <div class="note"><b>Hive</b>: direct curated generation. <b>Agent (dsh)</b>:
 the full DeepSeek Harness agent loop — bash/files/code tools, multi-step
-turns, durable session log — pointed at the loaded model.</div>
+turns, durable session log.</div>
 </section>
 </div>
 
-<!-- ==================== FAR RIGHT: hub ==================== -->
+<!-- ==================== FAR RIGHT: hub + inspector tabs ============ -->
 <div class="col">
+<div class="tabs">
+<button class="tab active" data-rtab="rtab-hub">Hub</button>
+<button class="tab" data-rtab="rtab-inspect">Inspector</button>
+</div>
+<div id="rtab-hub" class="tabpane">
 <section>
 <h2 style="margin-top:0">Hugging Face hub <span class="note">(live)</span></h2>
-<div class="row"><span class="sugwrap" style="width:100%"><input id="q" placeholder="search gguf repos…" style="width:100%"
-       list="repo-suggestions">
+<div class="row"><span class="sugwrap" style="width:100%"><input id="q" placeholder="search gguf repos…" style="width:100%">
 <div class="sugbox" id="sug-q"></div></span></div>
 <datalist id="repo-suggestions"></datalist>
 <pre id="hub">(search above)</pre>
-<div class="row"><span class="sugwrap" style="width:100%"><input id="drepo" placeholder="repo id (type for suggestions)" style="width:100%"
-       list="repo-suggestions">
+<div class="row"><span class="sugwrap" style="width:100%"><input id="drepo" placeholder="repo id (type for suggestions)" style="width:100%">
 <div class="sugbox" id="sug-drepo"></div></span><br>
 <input id="dfile" placeholder="file.gguf" size="24">{tip('Exact GGUF filename inside that repo (copy it from the search results).')}
 <button onclick="download()">Download</button></div>
 <pre id="downloads"></pre>
 </section>
+</div>
+<div id="rtab-inspect" class="tabpane" style="display:none">
+<section>
+<h2 style="margin-top:0">Prompt inspector <span class="note">(last turn)</span></h2>
+<div id="inspect-summary" class="kv-grid"></div>
+<h2 style="font-size:.95rem;margin-top:1rem">Selected chunks (in the context)</h2>
+<div id="inspect-selected" class="inspector-list"></div>
+<h2 style="font-size:.95rem;margin-top:1rem">Dropped chunks <span class="note" id="inspect-dropped-n"></span></h2>
+<div id="inspect-dropped" class="inspector-list"></div>
+<h2 style="font-size:.95rem;margin-top:1rem">Assembled context (preview)</h2>
+<pre id="inspect-assembled" style="max-height:200px"></pre>
+<h2 style="font-size:.95rem;margin-top:1rem">Stage timings</h2>
+<pre id="inspect-timings"></pre>
+</section>
+</div>
 </div>
 
 </div>
@@ -797,6 +856,7 @@ async function switchSession(id) {{
   localStorage.setItem('hive-console-conv', convId);
   restoreTranscript(id);
   renderTabs();
+  applyConvProvider();
   try {{ await api('/v1/hive/state?conversation_id=' + encodeURIComponent(id)); }} catch (e) {{}}
 }}
 function closeSession(id) {{
@@ -817,6 +877,23 @@ function saveSession() {{
   cur.updated = Date.now();
   persistSessions();
   renderTabs();
+}}
+/* per-conversation inference target (the header model dropdown) */
+function convProviderStore() {{
+  try {{ return JSON.parse(localStorage.getItem('hive-console-convprov') || '{{}}'); }}
+  catch (e) {{ return {{}}; }}
+}}
+function saveConvProvider(value) {{
+  const per = convProviderStore();
+  if (value) per[convId] = value;
+  else delete per[convId];
+  localStorage.setItem('hive-console-convprov', JSON.stringify(per));
+}}
+function applyConvProvider() {{
+  const v = convProviderStore()[convId];
+  if (!v) return;
+  const sel = document.getElementById('chat-provider');
+  if ([...sel.options].some(o => o.value === v)) sel.value = v;
 }}
 
 /* ------------------------------ chat -------------------------------- */
@@ -973,7 +1050,11 @@ async function sendChat() {{
     m.className = 'meta';
     m.textContent = metaText;
     ai.appendChild(m);
-    record('ai', text || '(empty reply)', metaText);
+    if (body.inspection !== undefined && body.inspection) {{
+      renderInspection(body.inspection);
+    }} else {{
+      fetchInspection();
+    }}
   }} catch (e) {{
     ai.textContent = 'request failed: ' + e.message;
     record('ai', 'request failed: ' + e.message);
@@ -1087,6 +1168,8 @@ ensureSession(convId);
 persistSessions();
 renderTabs();
 restoreTranscript(convId);
+/* the model dropdown populates async from /v1/provider/config */
+setTimeout(applyConvProvider, 2000);
 
 /* --------------------------- server panel ---------------------------- */
 function launchBody() {{
@@ -1397,6 +1480,63 @@ async function saveProviders() {{
     document.getElementById('prov-msg').textContent =
       'saved to ' + (r.persisted_to || 'memory');
   }} catch (e) {{ document.getElementById('prov-msg').textContent = String(e); }}
+}}
+
+/* --------------------------- inspector ------------------------------- */
+for (const btn of document.querySelectorAll('[data-rtab]')) {{
+  btn.addEventListener('click', () => {{
+    for (const b of document.querySelectorAll('[data-rtab]')) b.classList.remove('active');
+    for (const p of document.querySelectorAll('[data-rtab] + .tabpane, .tabpane[data-rtab]')) {{}}
+    document.querySelectorAll('.col .tabpane').forEach(p => p.style.display = 'none');
+    btn.classList.add('active');
+    document.getElementById(btn.dataset.rtab).style.display = '';
+    if (btn.dataset.rtab === 'rtab-inspect') fetchInspection();
+  }});
+}}
+
+async function fetchInspection() {{
+  try {{
+    const data = await api('/v1/hive/inspect/' + encodeURIComponent(convId));
+    renderInspection(data);
+  }} catch (e) {{
+    document.getElementById('inspect-summary').textContent =
+      'no inspection data: ' + e.message;
+  }}
+}}
+
+function renderInspection(d) {{
+  const kv = (label, v) => `<div class='kv'><span>${{label}}</span><b>${{v}}</b></div>`;
+  document.getElementById('inspect-summary').innerHTML =
+    kv('Turn', d.turn) + kv('Route', d.routing?.route_to || '-') +
+    kv('Budget', `${{d.budget?.used ?? 0}} / ${{d.budget?.total ?? 0}}`) +
+    kv('Utilization', `${{((d.budget?.utilization ?? 0) * 100).toFixed(1)}}%`) +
+    kv('Top score', d.top_raw_score) +
+    kv('Store chunks', d.store_chunks) +
+    kv('Drift', d.drift_detected ? '⚠ yes' : 'no');
+  const selWrap = document.getElementById('inspect-selected');
+  selWrap.innerHTML = '';
+  for (const c of d.selected_chunks || []) {{
+    selWrap.insertAdjacentHTML('beforeend',
+      `<div class='chunkrow sel'><span class='score'>${{c.raw_score}}</span>${{c.id}}` +
+      `<div class='preview'>${{c.preview}}</div></div>`);
+  }}
+  if (!(d.selected_chunks || []).length)
+    selWrap.textContent = '(none selected)';
+  const dropWrap = document.getElementById('inspect-dropped');
+  dropWrap.innerHTML = '';
+  for (const c of d.dropped_chunks || []) {{
+    dropWrap.insertAdjacentHTML('beforeend',
+      `<div class='chunkrow drop'><span class='score'>${{c.raw_score}}</span>${{c.id}}` +
+      `<div class='preview'>${{c.preview}}</div></div>`);
+  }}
+  document.getElementById('inspect-dropped-n').textContent =
+    d.dropped_count ? `(${{d.dropped_count}} total)` : '';
+  if (!(d.dropped_chunks || []).length)
+    dropWrap.textContent = '(none dropped)';
+  document.getElementById('inspect-assembled').textContent =
+    d.assembled_preview || '(empty)';
+  document.getElementById('inspect-timings').textContent =
+    JSON.stringify(d.timings ?? {{}}, null, 1);
 }}
 
 /* --------------------------- status poll ------------------------------ */

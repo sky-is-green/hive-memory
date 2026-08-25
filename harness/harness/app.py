@@ -47,6 +47,13 @@ import queue
 
 from harness.agent import DshAgentService
 from harness.commands import ConsoleCommands
+from harness.trainer import (
+    draft_candidate,
+    evaluate_candidate,
+    mine_evidence,
+    promote,
+    summarize_evidence,
+)
 
 from backend.cache_manager import KVCacheManager
 from backend.engines import (
@@ -510,7 +517,16 @@ def create_app(
     """
     from sieve.ultra_small import UltraSmallDrone
 
+    embedding_backend = os.environ.get("HARNESS_EMBEDDING_BACKEND", "local")
+    embedding_url = os.environ.get("HARNESS_EMBEDDING_URL", "")
+    embedding_model = os.environ.get("HARNESS_EMBEDDING_MODEL", "default")
+
     def _default_ultra():
+        if embedding_backend == "served" and embedding_url:
+            from sieve.served import ServedEmbeddingDrone
+
+            return ServedEmbeddingDrone(base_url=embedding_url,
+                                        model=embedding_model)
         return UltraSmallDrone(confidence_mode="off")
 
     def _default_backend(model: Optional[str], provider: Optional[str] = None):
@@ -599,7 +615,19 @@ def create_app(
             "timings": result.timings,
             "pes": result.pes,
             "degradation_level": result.degradation_level,
+            "inspection": hive.inspect_turn(result),
         }
+
+    @app.get("/v1/hive/inspect/{conversation_id}")
+    def hive_inspect(conversation_id: str):
+        """Last turn's full curation detail for the prompt inspector."""
+        with st.global_lock:
+            hive = st.hives.get(conversation_id)
+        if hive is None:
+            raise HTTPException(404, f"no such conversation: {conversation_id}")
+        if not hasattr(hive, "_last_turn_result") or hive._last_turn_result is None:
+            raise HTTPException(404, "no turn has been processed yet")
+        return hive.inspect_turn(hive._last_turn_result)
 
     @app.post("/v1/hive/reset")
     def hive_reset(req: ResetRequest):
@@ -1290,6 +1318,79 @@ def create_app(
     @app.post("/v1/agent/cancel")
     def agent_cancel():
         return agent_service.cancel()
+
+    # ------------------------------------------------------------------
+    # Preset trainer (X15-X18)
+    @app.get("/v1/trainer/evidence")
+    def trainer_evidence():
+        """Mine session logs for tool-use patterns and outcomes."""
+        session_root = REPO_ROOT / "harness_state" / "dsh_sessions"
+        all_tools = ["bash", "str_replace_editor", "fs_search", "web",
+                     "subagent", "todo", "code_runtime", "skill"]
+        evidences = mine_evidence(session_root, all_tools)
+        return {"evidence": [e.to_dict() for e in evidences],
+                "summary": summarize_evidence(evidences)}
+
+    @app.post("/v1/trainer/draft")
+    def trainer_draft(body: dict):
+        """Draft a candidate preset from the evidence."""
+        name = body.get("name") or f"candidate-{int(time.time())}"
+        session_root = REPO_ROOT / "harness_state" / "dsh_sessions"
+        all_tools = body.get("all_tools") or [
+            "bash", "str_replace_editor", "fs_search", "web",
+            "subagent", "todo", "code_runtime", "skill"]
+        evidences = mine_evidence(session_root, all_tools)
+        summary = summarize_evidence(evidences)
+        baseline = Path(body.get("baseline") or "")
+        if not baseline.is_file():
+            raise HTTPException(422, f"baseline preset not found: {baseline}")
+        output = REPO_ROOT / "harness_state" / "trainer_candidates"
+        candidate = draft_candidate(summary, baseline, output, name)
+        return candidate.to_dict()
+
+    @app.post("/v1/trainer/evaluate")
+    def trainer_evaluate(body: dict):
+        """Run candidate vs baseline on bench tasks, score, compare."""
+        candidate_path = Path(body.get("candidate") or "")
+        meta_path = candidate_path.with_suffix("").with_suffix(".trainer-meta.json") \
+            if candidate_path.suffix == ".yml" else \
+            candidate_path.parent / (candidate_path.stem + ".trainer-meta.json")
+        if not meta_path.is_file():
+            raise HTTPException(404, f"trainer meta not found: {meta_path}")
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        from deepseek_harness import DeepSeekHarness
+
+        def factory(config_path):
+            return DeepSeekHarness(
+                provider="deepseek-official",
+                base_url=os.environ.get("HARNESS_EMBEDDING_URL",
+                                        "http://127.0.0.1:1235/v1"),
+                api_key="lm-studio",
+                model=os.environ.get("HARNESS_AGENT_MODEL", "default"),
+                cwd=str(REPO_ROOT),
+                session_root=str(REPO_ROOT / "harness_state" / "dsh_sessions"),
+                cordis=str(config_path),
+            )
+
+        tasks = body.get("tasks") or [
+            "List the files in the current directory.",
+            "Create a file named trainer-test.txt containing 'hello'.",
+            "Search for the word 'hive' in .py files and report matches.",
+        ]
+        candidate = draft_candidate.__wrapped__ if hasattr(
+            draft_candidate, "__wrapped__") else None
+        from harness.trainer import CandidatePreset
+
+        cand = CandidatePreset(
+            name=candidate_path.stem, baseline=meta.get("baseline", ""),
+            changes=meta.get("changes", {}),
+            evidence_summary=meta.get("evidence_summary", {}),
+            path=str(candidate_path),
+        )
+        results = evaluate_candidate(cand, factory, tasks)
+        meta["eval_result"] = results
+        meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        return results
 
     @app.get("/v1/server/status")
     def server_status():
