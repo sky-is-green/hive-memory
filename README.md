@@ -1,14 +1,15 @@
-# Hive Memory / HiveBench
+# HiveMemory / HiveBench
 
-**Hive Memory** is an external, multi-agent context-curation layer for
+**HiveMemory** is an external, multi-agent context-curation layer for
 long-horizon LLM conversations. It sits between a user and a local LLM backend,
 filtering, scoring, compressing, and reassembling conversation history into a
 bounded, high-relevance context window for every turn — so a generative model
 performs well over arbitrarily long conversations on consumer hardware.
 
 **HiveBench** is its evaluation suite: unit/integration/benchmark tests, a live
-benchmark harness, and the white paper's falsifiable predictions (P1–P12) with
-measured verdicts.
+benchmark harness, and the white paper's falsifiable predictions
+([P1–P12](HIVE-WHITE-PAPER.md#5-hypotheses-and-predictions)) with measured
+verdicts.
 
 ## Why Hive
 
@@ -20,12 +21,12 @@ filtering, and routing context — while the primary generative LLM does the
 **The headline measurement** — same 308+ turn conversations, same model,
 hive vs naive FIFO windowing (live run `20260822_211131`):
 
-- **Hive ≥ FIFO on 85.1% of retrievable turns** (P3) — the direct head-to-head
-  against the current standard
-- **90.3% of the facts the model stated made it into context** — deterministic
-  P2 diagnostic, ≥90% target; FIFO truncates and drops facts at its window
+- **[Hive ≥ FIFO on 85.1% of retrievable turns](HIVE-WHITE-PAPER.md#p3--context-sufficiency-hypothesis) (P3)** —
+  the direct head-to-head against the current standard
+- **[90.3% of the facts the model stated made it into context](HIVE-WHITE-PAPER.md#p2--retrieval-precision-hypothesis)** (P2) — deterministic
+  diagnostic, ≥90% target; FIFO truncates and drops facts at its window
   limit
-- **Flat generation speed across 308+ turns** — 14.5 → 15.5 decode tps
+- **[Flat generation speed across 308+ turns](HIVE-WHITE-PAPER.md#p1--constant-throughput-hypothesis)** (P1) — 14.5 → 15.5 decode tps
   (+6.7%), no context-bloat slowdown
 - All at ~3.4 ms assembly + ~15 ms drone scoring overhead per turn
 
@@ -57,9 +58,9 @@ quality. The head-to-head evidence above is what the claims rest on.*
 | Metric | Hive | Status quo (FIFO/rolling window) |
 |---|---|---|
 | Pipeline efficiency (PES, flagship live run) | **80.0 GREEN** | 12.2 / 11.6 |
-| Decode speed over 308+ turns | **Flat** (14.5→15.5 tps, +6.7%) | Slows as context grows, then truncates |
-| Stated-fact recall (deterministic) | **90.3%** | Facts dropped at window limit |
-| Turns where hive ≥ FIFO (P3) | **85.1%** | — |
+| [Decode speed over 308+ turns](HIVE-WHITE-PAPER.md#p1--constant-throughput-hypothesis) (P1) | **Flat** (14.5→15.5 tps, +6.7%) | Slows as context grows, then truncates |
+| [Stated-fact recall](HIVE-WHITE-PAPER.md#p2--retrieval-precision-hypothesis) (P2, deterministic) | **90.3%** | Facts dropped at window limit |
+| [Turns where hive ≥ FIFO](HIVE-WHITE-PAPER.md#p3--context-sufficiency-hypothesis) (P3) | **85.1%** | — |
 | Paired A/B under window pressure (82 turns, live) | **84.1%, ahead once the window drops facts (87.5% vs 82.1% late-turn)** | 84.1% while its window still holds everything |
 | Context utilization (p50) | **74.5%** | ~40% (fluff) |
 | Added latency per turn | **~18 ms** | 0 (but loses the facts) |
@@ -84,7 +85,8 @@ Most evaluation harnesses tell you how a model performs in a sandbox. HiveBench
 tells you *whether the context you feed the model is the reason it works* — and
 it does it deterministically, offline, and replayably:
 
-- **Falsifiable, not vibes.** The white paper's P1–P12 predictions ship as
+- **Falsifiable, not vibes.** The white paper's
+  [P1–P12 predictions](HIVE-WHITE-PAPER.md#5-hypotheses-and-predictions) ship as
   executable tests with measured PASS/FAIL verdicts (§8). Every number in this
   README is reproduced by a command in the repo.
 - **No LLM-as-judge circularity in the evidence path.** The deterministic
