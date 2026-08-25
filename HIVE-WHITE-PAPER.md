@@ -1,4 +1,4 @@
-﻿# Hive Memory: A Managed-Decay Context Curation Architecture for Long-Horizon LLM Conversations
+# Hive Memory: A Managed-Decay Context Curation Architecture for Long-Horizon LLM Conversations
 
 **A white paper for the open-source LLM and testing community**
 
@@ -11,7 +11,7 @@
 - [2. Related Work](#2-related-work)
 - [3. Architectural Overview](#3-architectural-overview)
 - [4. Theoretical Foundations](#4-theoretical-foundations) · [Postulate 1: context curation](#postulate-1-the-context-curation-postulate) · [Postulate 2: managed decay](#postulate-2-the-managed-decay-postulate) · [Postulate 3: separation](#postulate-3-the-separation-postulate) · [Postulate 4: ground-truth bootstrap](#postulate-4-the-ground-truth-bootstrap-postulate)
-- [5. Hypotheses and Predictions](#5-hypotheses-and-predictions) · [P1 Constant throughput](#p1-constant-throughput-hypothesis) · [P2 Retrieval precision](#p2-retrieval-precision-hypothesis) · [P3 Context sufficiency](#p3-context-sufficiency-hypothesis) · [P4 Domain-dependent decay](#p4-domain-dependent-decay-curve) · [P5 Targeted masking](#p5-targeted-masking-hypothesis) · [P6 Confidence escalation](#p6-confidence-escalation-hypothesis) · [P7 Queen agreement](#p7-queen-agreement-hypothesis) · [P8 Heuristic-routing floor](#p8-heuristic-routing-floor-hypothesis) · [P9 Densest duplicate](#p9-densest-duplicate-hypothesis) · [P10 Drift reset](#p10-drift-reset-hypothesis) · [P11 Comb resurrection](#p11-comb-resurrection-hypothesis-pass-deterministically-2026-08-24-live-validation-completed-2026-08-24)
+- [5. Hypotheses and Predictions](#5-hypotheses-and-predictions) · [P1 Constant throughput](#p1-constant-throughput-hypothesis) · [P2 Retrieval precision](#p2-retrieval-precision-hypothesis) · [P3 Context sufficiency](#p3-context-sufficiency-hypothesis) · [P4 Domain-dependent decay](#p4-domain-dependent-decay-curve) · [P5 Targeted masking](#p5-targeted-masking-hypothesis) · [P6 Confidence escalation](#p6-confidence-escalation-hypothesis) · [P7 Queen agreement](#p7-queen-agreement-hypothesis) · [P8 Heuristic-routing floor](#p8-heuristic-routing-floor-hypothesis) · [P9 Densest duplicate](#p9-densest-duplicate-hypothesis) · [P10 Drift reset](#p10-drift-reset-hypothesis) · [P11 Comb resurrection](#p11-comb-resurrection-hypothesis-pass-deterministically-2026-08-24-live-validation-completed-2026-08-24) · [P12 Fact distillation (draft)](#p12-store-time-fact-distillation-hypothesis-draft-2026-08-25-protocol-only)
 - [6. The Pipeline Efficiency Score (PES)](#6-the-pipeline-efficiency-score-pes)
 - [7. Experimental Protocol (Reproducibility)](#7-experimental-protocol-reproducibility)
 - [8. Measured Outcome Summary](#8-measured-outcome-summary)
@@ -455,6 +455,22 @@ Code (young facts, no stale penalty) tolerates aggressive decay, recall holds ab
 **Falsification:** Topic-return recall with the comb < 90%, OR the comb's resurrected chunks crowd out relevant active-store chunks (sufficiency regression on non-return turns), OR the comb cannot beat a plain "keep the last N old chunks in the store" baseline.
 
 **Live validation (2026-08-24):** the live `--return` corpus path completed end-to-end (`runs/p11_live_20260824`, 6 conversations / 192 turns, `prism-ml/bonsai-27b`, comb enabled): the comb archived **64 once-curated chunks** across 5 conversations during the live run (verified from the per-conversation JSONL archives). The run's retrieval recall was **79.8%** on stated facts (ingestion_rate 28.8%, perfect-hive ceiling 18.2%, bonsai stated few of the corpus's canonical facts), precision 26.5%, post-run PES 61.66 YELLOW. The deterministic falsification clauses (100% vs 20% no-comb / keep-last-N under budget pressure; no crowding; no full-replay regression) are unchanged. A reporting gap found along the way (comb stats were not checkpointed, so a resumed run's report lost its `comb` block) is fixed (the checkpoint now persists `comb_stats_history` + `comb_stats`).
+
+### P12: Store-Time Fact Distillation Hypothesis (DRAFT 2026-08-25, protocol only)
+
+**Status:** draft registered before any implementation (protocol-first, R1); no measurement exists yet. This is Threat 6 option (b) applied at storage time: change what the comb stores, not the ranking model.
+
+**Prediction:** Distilling each chunk into self-contained atomic fact statements at comb-archive time (entities named explicitly, one decision per statement, stored alongside the raw chunk) raises fact-level lexical recall@3 on topic-return turns by >=10 points over raw-only archival on matched corpora, without fabricating content and without crowding regressions on non-return turns.
+
+**Logic chain:**
+1. The comb ranks lexically (P11 probe: word-overlap beat the L3-v2 drone at every k, ~300x cheaper per gated turn).
+2. Lexical ranking retrieves an archived record only if its text shares content words with the return query; conversational chunks bury decisions under pronouns and filler ("we decided to go with the second option instead"), so overlap fails even when the decision is present in the archive.
+3. Rewriting at archive time into atomic, entity-named facts maximizes query-term overlap while preserving decision content; storing distilled facts ALONGSIDE raw chunks adds retrieval targets without removing any.
+4. Conclusion: more return turns become retrievable, at better ranks, than raw-only archival, at bounded archive-time cost (drone-scale rewriting only; no primary-model calls).
+
+**Measurement:** Extend the `--return` corpus generator with a paired variant where each A-phase fact is stated in pronominal/filler-heavy form (the case distillation targets). Run the deterministic P11 replay twice over identical histories and fixed budgets: (a) control, comb archives raw chunks only; (b) treatment, comb archives distilled facts + raw chunks. Score fact-level recall@{1, 3, 5} on return turns and keep every P11 clause unchanged: crowding on non-return turns, no full-replay regression, keep-last-N baseline, abstain/hedge check on genuinely absent facts. Fidelity gate: every distilled fact must be auditable to its source chunk (entity plus decision overlap, sampled manual audit), with the fabrication rate reported next to recall. Cost accounting: distillation invocations per archived chunk recorded and bounded.
+
+**Falsification:** recall@3 improvement < 10 points across both corpus forms, OR >5% of distilled facts are not entailed by their source chunk, OR non-return sufficiency regresses >2 points (crowding via duplicated retrieval targets), OR distillation cost exceeds the probe's per-turn budget envelope.
 
 ---
 
