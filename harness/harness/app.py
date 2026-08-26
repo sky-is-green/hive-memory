@@ -1,4 +1,4 @@
-﻿"""The harness sidecar FastAPI application.
+"""The harness sidecar FastAPI application.
 
 State model
 -----------
@@ -106,6 +106,10 @@ def _list_runs(runs_root: Path) -> list[dict]:
     return entries
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+# Hive mode (AFK) canonical state - workspace-level so all projects share one source.
+MODE_FILE = Path(os.environ.get("HIVE_MODE_FILE", str(Path(REPO_ROOT).parent / "HIVE-MODE.json")))
+RESEARCH_QUEUE = Path(os.environ.get(
+    "HIVE_RESEARCH_QUEUE", str(Path(REPO_ROOT).parent / "RESEARCH-QUEUE.md")))
 DEFAULT_RUNS_ROOT = REPO_ROOT / "runs"
 DEFAULT_PORT = 8765
 
@@ -1427,6 +1431,66 @@ def create_app(
             return models_manager.delete_local(file)
         except (ValueError, FileNotFoundError) as exc:
             raise HTTPException(400, str(exc))
+
+
+    @app.get("/v1/research/queue")
+    def research_queue_get():
+        """Pending deep-research questions. Execution is QUEEN-only: entries are
+        picked up when the primary session next wakes."""
+        if not RESEARCH_QUEUE.exists():
+            return {"items": []}
+        items = []
+        for line in RESEARCH_QUEUE.read_text(encoding="utf-8-sig").splitlines():
+            s = line.strip()
+            if s.startswith("- [ ] "):
+                items.append(s[6:])
+        return {"items": items}
+
+    @app.post("/v1/research/queue")
+    async def research_queue_add(req: Request):
+        body = await req.json()
+        q = str(body.get("question", "")).strip()
+        if not q:
+            raise HTTPException(422, "question is required")
+        q = q[:500]
+        with RESEARCH_QUEUE.open("a", encoding="utf-8") as fh:
+            fh.write(f"- [ ] {q}\n")
+        return {"queued": True, "question": q}
+
+
+    @app.get("/v1/hive/mode")
+    def hive_mode_get():
+        if MODE_FILE.exists():
+            try:
+                data = json.loads(MODE_FILE.read_text(encoding="utf-8-sig"))
+                return {"afk": True, **data, "_file": str(MODE_FILE)}
+            except Exception as exc:
+                return {"afk": False, "error": f"unreadable mode file: {exc}",
+                        "_file": str(MODE_FILE)}
+        return {"afk": False, "_file": str(MODE_FILE)}
+
+    @app.post("/v1/hive/mode")
+    async def hive_mode_set(req: Request):
+        body = await req.json()
+        afk = bool(body.get("afk"))
+        note = str(body.get("note", ""))[:200]
+        if afk:
+            payload = {"mode": "AFK",
+                       "since": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                       "operator": "away", "note": note,
+                       "preapproved": ["GREEN/YELLOW fixes",
+                                       "catalog+doc regeneration",
+                                       "executing HIVE-PLAN orders",
+                                       "approved-proposal implementation",
+                                       "gate bug fixes"],
+                       "queue_for_return": ["pushes to public masters",
+                                            "PR merges",
+                                            "policy/protocol changes",
+                                            "RED defects beyond containment"]}
+            MODE_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        elif MODE_FILE.exists():
+            MODE_FILE.unlink()
+        return {"afk": afk, "note": note}
 
     @app.post("/v1/server/stop")
     def server_stop(key: Optional[str] = Query(default=None)):

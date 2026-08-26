@@ -1,4 +1,4 @@
-﻿"""Server-rendered report views (Seam B) + the Studio console page.
+"""Server-rendered report views (Seam B) + the Studio console page.
 
 Plain HTML, no JS dependencies. Renders one ``run_report.json`` bundle: the
 post-run PES headline with its weighted components, the P1–P11 verdict table,
@@ -315,6 +315,9 @@ _SERVER_CSS = _CSS + """
         font-size: .8rem; padding: .25rem .7rem; border-radius: 999px; }
  #chatin { flex: 1; }
  #stopbtn { background: #b3372c; color: #fff; border: none; }
+ #afkbtn { min-width: 5.5rem; }
+ #afkbtn.afk-on { background: #b3372c; color: #fff; border-color: #b3372c;
+        animation: hiveblink 2.4s infinite; }
  /* inspector */
  .inspector-list { max-height: 300px; overflow-y: auto; }
  .chunkrow { background: #fff; border: 1px solid #e3eaf1; border-radius: 6px;
@@ -457,6 +460,8 @@ def render_server_page() -> str:
 <html><head><meta charset="utf-8"><title>Studio server &amp; models</title>
 <style>{_SERVER_CSS}</style></head><body>
 <h1>Hive Studio console</h1>
+<p style="margin:.3rem 0"><button id="afkbtn" onclick="toggleAfk(this)">AFK</button>{tip('AFK mode: human away - QUEEN runs expanded autonomy (GREEN/YELLOW fixes, regen, HIVE-PLAN orders). Public pushes/merges/policy changes queue for return; RED defects contained and logged.')}</p>
+<form style="display:inline" onsubmit="event.preventDefault(); return false"><input id="researchq" placeholder="deep-research question..." size="30" autocomplete="off" onkeydown="if (event.key === &quot;Enter&quot;) researchAdd(this)"> <button id="researchsubmit" onclick="researchAdd(this)">Research</button> <span id="researchcount" class="meta"></span>{tip('Queues a deep-research question for QUEEN. Execution is master-only; reports land in RESEARCH/<slug>.md and are summarized on wake.')}</form>
 
 <div class="grid">
 
@@ -899,6 +904,42 @@ function applyConvProvider() {{
   if ([...sel.options].some(o => o.value === v)) sel.value = v;
 }}
 
+/* --------------------------- afk toggle ------------------------------ */
+async function toggleAfk(btn) {{
+  const on = btn.dataset.afk === '1';
+  const r = await api('/v1/hive/mode', 'POST', {{afk: !on, note: on ? 'operator returned' : 'operator away'}});
+  applyAfk(r.afk);
+}}
+function applyAfk(on) {{
+  const b = document.getElementById('afkbtn');
+  if (!b) return;
+  b.dataset.afk = on ? '1' : '0';
+  b.textContent = on ? 'AFK ON - click to end' : 'AFK';
+  b.classList.toggle('afk-on', !!on);
+}}
+(async function initAfk() {{
+  try {{ const m = await api('/v1/hive/mode'); applyAfk(!!m.afk); }} catch (e) {{}}
+}})();
+/* --------------------------- research queue -------------------------- */
+async function researchAdd(btn) {{
+  const inp = document.getElementById('researchq');
+  const q = inp.value.trim();
+  if (!q) return;
+  btn.disabled = true;
+  try {{
+    await api('/v1/research/queue', 'POST', {{question: q}});
+    inp.value = '';
+    loadResearchCount();
+  }} finally {{ btn.disabled = false; }}
+}}
+async function loadResearchCount() {{
+  try {{
+    const r = await api('/v1/research/queue');
+    const b = document.getElementById('researchcount');
+    if (b) b.textContent = r.items.length ? '(' + r.items.length + ' queued)' : '';
+  }} catch (e) {{}}
+}}
+loadResearchCount();
 /* ------------------------------ chat -------------------------------- */
 function bubble(role, text, meta) {{
   const log = document.getElementById('chatlog');
