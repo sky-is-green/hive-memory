@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import struct
 import subprocess
 import threading
 import time
@@ -30,6 +31,17 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import requests
+
+# Quantization labels for GGUF general.file_type, mirroring llama.cpp's
+# LLAMA_FTYPE_* values. Unknown values render as ftype-N.
+_FILE_TYPE_NAMES: dict[int, str] = {
+    0: 'F32', 1: 'F16', 2: 'Q4_0', 3: 'Q4_1', 4: 'Q4_1_SOME_F16', 5: 'Q4_2', 6: 'Q4_3',
+    7: 'Q8_0', 8: 'Q5_0', 9: 'Q5_1', 10: 'Q2_K', 11: 'Q3_K_S', 12: 'Q3_K_M', 13: 'Q3_K_L',
+    14: 'Q4_K_S', 15: 'Q4_K_M', 16: 'Q5_K_S', 17: 'Q5_K_M', 18: 'Q6_K', 19: 'IQ2_XXS',
+    20: 'IQ2_XS', 21: 'Q2_K_S', 22: 'IQ3_XXS', 23: 'IQ1_S', 24: 'IQ4_NL', 25: 'IQ3_S',
+    26: 'IQ2_S', 27: 'IQ4_XS', 28: 'IQ1_M', 29: 'BF16', 30: 'Q4_0_4_4', 31: 'Q4_0_4_8',
+    32: 'Q4_0_8_8', 33: 'TQ1_0', 34: 'TQ2_0',
+}
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HF_API = "https://huggingface.co/api"
@@ -106,6 +118,127 @@ def _hf_download(repo_id: str, filename: str, dest_dir: Path,
         repo_id=repo_id, filename=filename, local_dir=str(dest_dir),
         token=token or os.environ.get("HF_TOKEN") or None,
     ))
+
+
+def _read_gguf_metadata(path: Path) -> dict:
+    """Best-effort GGUF header parse for library hover metadata.
+
+    Reads the GGUF magic + version + KV section and extracts
+    general.architecture, general.file_type (→ quantization label),
+    and <arch>.context_length. Missing or unreadable files return {}.
+    Mirrors the TypeScript gguf-metadata parser's FILE_TYPE_NAMES.
+    """
+    try:
+        with open(path, "rb") as fh:
+            magic = fh.read(4)
+            if magic != b"GGUF":
+                return {}
+            ver = struct.unpack("<I", fh.read(4))[0]
+            if ver not in (2, 3):
+                return {}
+            pos = fh.tell()
+            try:
+                tc = struct.unpack("<Q", fh.read(8))[0]
+                mc = struct.unpack("<Q", fh.read(8))[0]
+                if mc > 10000:
+                    raise ValueError("implausible")
+            except Exception:
+                fh.seek(pos)
+                tc = struct.unpack("<I", fh.read(4))[0]
+                mc = struct.unpack("<I", fh.read(4))[0]
+                if mc > 10000:
+                    return {}
+            out: dict = {}
+            arch: str | None = None
+            file_type: int | None = None
+            context_candidates: dict[str, int] = {}
+            for _ in range(int(mc)):
+                try:
+                    klen = struct.unpack("<Q" if ver >= 3 else "<I", fh.read(8 if ver >= 3 else 4))[0]
+                except Exception:
+                    break
+                if klen > 500:
+                    break
+                try:
+                    key = fh.read(int(klen)).decode("utf-8", errors="ignore")
+                except Exception:
+                    break
+                try:
+                    ktype = struct.unpack("<I", fh.read(4))[0]
+                except Exception:
+                    break
+                try:
+                    if ktype == 0:
+                        val = struct.unpack("<B", fh.read(1))[0]
+                    elif ktype == 1:
+                        val = struct.unpack("<b", fh.read(1))[0]
+                    elif ktype == 2:
+                        val = struct.unpack("<H", fh.read(2))[0]
+                    elif ktype == 3:
+                        val = struct.unpack("<h", fh.read(2))[0]
+                    elif ktype == 4:
+                        val = struct.unpack("<I", fh.read(4))[0]
+                    elif ktype == 5:
+                        val = struct.unpack("<i", fh.read(4))[0]
+                    elif ktype == 6:
+                        val = struct.unpack("<f", fh.read(4))[0]
+                    elif ktype == 7:
+                        val = bool(struct.unpack("<B", fh.read(1))[0])
+                    elif ktype == 8:
+                        slen = struct.unpack("<Q" if ver >= 3 else "<I", fh.read(8 if ver >= 3 else 4))[0]
+                        if slen > 64 * 1024 * 1024:
+                            break
+                        val = fh.read(int(slen)).decode("utf-8", errors="ignore")
+                    elif ktype == 9:
+                        atype = struct.unpack("<I", fh.read(4))[0]
+                        alen = struct.unpack("<Q" if ver >= 3 else "<I", fh.read(8 if ver >= 3 else 4))[0]
+                        if atype == 8:
+                            for __ in range(int(alen)):
+                                sl = struct.unpack("<Q" if ver >= 3 else "<I", fh.read(8 if ver >= 3 else 4))[0]
+                                fh.read(int(sl))
+                            val = f"<array:{alen}>"
+                        else:
+                            size = {0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8}.get(atype, 1)
+                            fh.read(int(alen) * size)
+                            val = f"<array:{alen}>"
+                    elif ktype == 10:
+                        val = struct.unpack("<Q", fh.read(8))[0]
+                    elif ktype == 11:
+                        val = struct.unpack("<q", fh.read(8))[0]
+                    elif ktype == 12:
+                        val = struct.unpack("<d", fh.read(8))[0]
+                    else:
+                        break
+                except Exception:
+                    break
+                if key == "general.architecture" and isinstance(val, str):
+                    arch = val
+                    out["general.architecture"] = val
+                elif key == "general.file_type" and isinstance(val, int):
+                    file_type = val
+                    out["general.file_type"] = val
+                elif key.endswith(".context_length") and isinstance(val, int):
+                    prefix = key[: -len(".context_length")]
+                    context_candidates[prefix] = int(val)
+                    out[key] = val
+                elif key in ("general.name",):
+                    out[key] = val
+                if arch is not None and file_type is not None and arch in context_candidates:
+                    if len(out) > 12:
+                        break
+            if arch is not None:
+                out["architecture"] = arch
+            if file_type is not None:
+                out["quantization"] = _FILE_TYPE_NAMES.get(file_type, f"ftype-{file_type}")
+                out["file_type"] = file_type
+            if arch is not None and arch in context_candidates:
+                out["context_length"] = context_candidates[arch]
+            elif context_candidates:
+                # fallback to any context_length when arch prefix unknown
+                out["context_length"] = next(iter(context_candidates.values()))
+            return out
+    except Exception:
+        return {}
 
 
 def _port_in_use(host: str, port: int, timeout: float = 1.0) -> bool:
@@ -307,13 +440,34 @@ class LlamaServerManager:
                 rel = str(p.relative_to(self.models_dir))
             except ValueError:
                 rel = p.name
-            entries.append({
+            meta = _read_gguf_metadata(p)
+            size_gb = round(stat.st_size / (1024 ** 3), 2)
+            modified = time.strftime("%Y-%m-%d %H:%M",
+                                     time.localtime(stat.st_mtime))
+            entry: dict = {
                 "name": p.stem,
                 "file": rel,
-                "size_gb": round(stat.st_size / (1024 ** 3), 2),
-                "modified": time.strftime("%Y-%m-%d %H:%M",
-                                          time.localtime(stat.st_mtime)),
-            })
+                "size_gb": size_gb,
+                "sizeGb": size_gb,
+                "modified": modified,
+                "lastModified": modified,
+            }
+            # gguf-metadata fields for the hover card (inline)
+            arch = meta.get("architecture") or meta.get("general.architecture")
+            quant = meta.get("quantization")
+            ctx = meta.get("context_length")
+            if arch is not None:
+                entry["architecture"] = arch
+            if quant is not None:
+                entry["quantization"] = quant
+            if ctx is not None:
+                entry["context_length"] = int(ctx)
+                entry["contextLength"] = int(ctx)
+            # keep raw gguf_metadata for advanced consumers (Auto preset, etc.)
+            if meta:
+                entry["gguf_metadata"] = meta
+                entry["ggufMetadata"] = meta
+            entries.append(entry)
         return sorted(entries, key=lambda e: e["modified"], reverse=True)
 
     def import_local_path(self, folder: str) -> dict:

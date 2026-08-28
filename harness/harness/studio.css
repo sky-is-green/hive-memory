@@ -130,6 +130,28 @@ summary { cursor: pointer; color: #456; font-size: .88rem; }
 .liblist .librow.selected button { background: #FFB703; color: #000000; border-color: #000000; }
 .liblist .librow.loaded { outline: 2px solid #157a3e; }
 .librow button { padding: .05rem .5rem; }
+/* HoverCard for Local library — delayed hover preview (arch/quant/context + sizeGb + lastModified inline).
+   Pattern mirrors ui-primitives HoverCard: fixed-position card portaled to document.body,
+   244px wide, 12/16 padding, 12px radius, dark surface #2C2C2E, elevated shadow.
+   Appears after 1s hover on div.librow, disappears on mouseleave. */
+.librow { position: relative; }
+.hovercard, .HoverCard {
+  position: fixed;
+  z-index: 100;
+  box-sizing: border-box;
+  width: 244px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: #2C2C2E;
+  color: #FFDD00;
+  font-size: .82rem;
+  line-height: 1.35;
+  white-space: normal;
+  word-break: break-word;
+  box-shadow: 0 4px 14px rgba(0,0,0,.28);
+  border: 1.5px solid #000;
+  pointer-events: none;
+}
 .hint { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; margin-left: .15rem; border: 1px solid #98a0b3; border-radius: 50%; font-size: 10px; line-height: 1; color: #556; background: #fff; cursor: help; position: relative; user-select: none; flex: none; vertical-align: 1px; }
 .hint:hover, .hint:focus { outline: none; border-color: #22263a; color: #000; }
 .hint::after { content: attr(data-tip); position: absolute; left: -6px; top: calc(100% + 7px); z-index: 40; width: max-content; max-width: 300px; padding: .45rem .6rem; border-radius: 6px; background: #1c1e26; color: #f2f3f7; font-size: .78rem; line-height: 1.35; text-align: left; white-space: normal; letter-spacing: normal; opacity: 0; visibility: hidden; transform: translateY(-4px); transition: opacity .12s ease .18s, transform .12s ease .18s; pointer-events: none; box-shadow: 0 4px 14px rgba(0, 0, 0, .28); }
@@ -175,3 +197,77 @@ pre { background: #FFB703; color: #000000; border: 1.5px solid #000000; }
 .sesstab.active { background: #FFB703; border: 1.5px solid #000000; color: #000000; transform: translateY(-2px); }
 .hint { background: #FFB703; color: #000000; border: 1.5px solid #000000; }
 .toolstep { background: #FFB703; border: 1.5px dashed #000000; }
+/* ---- Fit estimator S2: VRAM needs vs has, colored bar, context slider ---- */
+.fit-panel { margin:.6rem 0; padding:.7rem .8rem; background:rgba(255,255,255,.06); border:1px solid rgba(255,221,0,.22); border-radius:8px; }
+.fit-grid { display:grid; grid-template-columns: 1fr 1fr auto; gap:.5rem; align-items:center; font-size:.88rem; }
+.fit-needs,.fit-has { color:#FFDD00; font-variant-numeric:tabular-nums; font-weight:600; }
+.fit-pct { font-weight:700; font-size:.82rem; justify-self:end; }
+.fit-pct.ok { color:#157a3e; } .fit-pct.warn { color:#FFB703; } .fit-pct.bad { color:#b3372c; }
+.fit-bar { height:10px; background:rgba(255,221,0,.14); border:1px solid #000; border-radius:999px; overflow:hidden; margin:.45rem 0; }
+.fit-fill { height:100%; width:0%; border-radius:999px; transition:width .25s ease, background .25s ease; }
+.fit-fill.green { background:#157a3e; }
+.fit-fill.amber { background:#FFB703; }
+.fit-fill.red { background:#b3372c; }
+.fit-controls { display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; }
+.fit-controls input[type="range"] { flex:1; min-width:160px; accent-color:#FFB703; height:6px; }
+#eng-load-fit:disabled { opacity:.42; cursor:not-allowed; filter:grayscale(.2); }
+#eng-load-fit:not(:disabled) { background:#157a3e; color:#fff; border-color:#000; }
+#eng-load-fit:not(:disabled):hover { background:#1a8a4a; }
+/* ---- Auto presets button: in Engine profiles next to Model display ---- */
+#eng-auto { background:#157a3e; color:#fff; border-color:#000; font-weight:700; }
+#eng-auto:hover:not(:disabled) { background:#1a8a4a; }
+#eng-auto:disabled { opacity:.45; cursor:not-allowed; filter:grayscale(.25); }
+#eng-auto-msg { font-size:.82rem; color:#FFDD00; }
+
+/* ---- Merged Engine profiles grid — single form, uniform 2-col ---- */
+.engine-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.engine-group {
+  border: 1px solid rgba(255,221,0,.18);
+  border-radius: 8px;
+  padding: .85rem 1rem;
+  background: rgba(255,255,255,.04);
+}
+.engine-group h3 {
+  margin: 0 0 .6rem 0;
+  font-size: .95rem;
+  font-weight: 700;
+  color: #FFDD00;
+  border-bottom: 1px solid rgba(255,221,0,.14);
+  padding-bottom: .3rem;
+}
+.grid-2col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: .6rem 1rem;
+  align-items: end;
+}
+.grid-2col label {
+  display: flex;
+  flex-direction: column;
+  gap: .2rem;
+  font-size: .85rem;
+  color: #FFDD00;
+}
+.grid-2col input, .grid-2col select {
+  padding: .4rem .6rem;
+  font-size: .9rem;
+  border-radius: 6px;
+  border: 1.5px solid #000;
+  background: #FFB703;
+  color: #000;
+}
+.sampling-grid { gap: .5rem 1rem; }
+.load-grid { gap: .6rem 1rem; }
+.advanced-grid { gap: .6rem 1rem; }
+#engine-profile-form .row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+#engine-profile-form button[type="submit"] { background:#157a3e; color:#fff; border-color:#000; font-weight:700; padding:.5rem 1.2rem; }
+#engine-profile-form button[type="submit"]:hover:not(:disabled) { background:#1a8a4a; }
+#engine-profile-form button[type="submit"]:disabled { opacity:.5; cursor:not-allowed; }
+@media (max-width: 900px) {
+  .grid-2col { grid-template-columns: 1fr; }
+}
+

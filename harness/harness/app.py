@@ -126,6 +126,227 @@ _popen = subprocess.Popen  # module-level so tests can intercept
 # HTML consoles change with the code; never let a browser cache them.
 _NO_STORE = {"Cache-Control": "no-store"}
 
+def _hardware_summary() -> dict:
+    """Host VRAM/RAM summary for fit estimates (nvidia-smi + psutil, RAM fallback)."""
+    try:
+        vm = psutil.virtual_memory()
+        total_ram_gb = round(vm.total / (1024 ** 3), 2)
+        available_ram_gb = round(vm.available / (1024 ** 3), 2)
+    except Exception:
+        total_ram_gb = 8.0
+        available_ram_gb = 8.0
+    vram_gb: Optional[float] = None
+    devices: list[dict] = []
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
+            timeout=2, text=True, stderr=subprocess.DEVNULL,
+        )
+        for line in out.strip().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            last = line.rfind(",")
+            if last < 0:
+                continue
+            name = line[:last].strip().strip('"')
+            mem_str = line[last + 1:].strip()
+            try:
+                mib = int(mem_str)
+            except ValueError:
+                continue
+            gb = round(mib / 1024, 2)
+            vram_gb = max(vram_gb or 0, gb)
+            devices.append({"backend": "cuda", "name": name, "memory_gb": gb})
+    except Exception:
+        pass
+    available_gb = round(vram_gb, 2) if vram_gb is not None else total_ram_gb
+    return {
+        "total_ram_gb": total_ram_gb,
+        "available_ram_gb": available_ram_gb,
+        "vram_gb": vram_gb,
+        "available_gb": available_gb,
+        "devices": devices,
+        "vram_source": "nvidia-smi" if vram_gb is not None else "ram",
+    }
+
+def _read_gguf_metadata(path: Path) -> dict:
+    """Best-effort GGUF header parse for auto-preset (block_count, context, etc).
+
+    Reads the GGUF magic + version + metadata KV section and extracts a handful
+    of known keys (general.architecture, *block_count, *context_length,
+    *embedding_length) without requiring a full gguf library. Missing or
+    unreadable files return {}. This is the gguf-metadata source the Auto
+    button combines with GET /v1/models/local size_gb and GET /v1/server/status
+    hardware.
+    """
+    import struct
+
+    try:
+        with open(path, "rb") as fh:
+            magic = fh.read(4)
+            if magic != b"GGUF":
+                return {}
+            ver = struct.unpack("<I", fh.read(4))[0]
+            # v3 uses 64-bit counts, v1/v2 32-bit; try 64 then fallback
+            pos = fh.tell()
+            try:
+                tc = struct.unpack("<Q", fh.read(8))[0]
+                mc = struct.unpack("<Q", fh.read(8))[0]
+                # sanity: metadata count should be reasonable (< 10000)
+                if mc > 10000:
+                    raise ValueError("implausible")
+            except Exception:
+                fh.seek(pos)
+                tc = struct.unpack("<I", fh.read(4))[0]
+                mc = struct.unpack("<I", fh.read(4))[0]
+            out: dict = {}
+            for _ in range(int(mc)):
+                try:
+                    klen = struct.unpack("<Q" if ver >= 3 else "<I", fh.read(8 if ver >= 3 else 4))[0]
+                except Exception:
+                    break
+                if klen > 500:
+                    break
+                key = fh.read(int(klen)).decode("utf-8", errors="ignore")
+                try:
+                    ktype = struct.unpack("<I", fh.read(4))[0]
+                except Exception:
+                    break
+                # we care about a few string/uint32/uint64 keys
+                try:
+                    if ktype == 0:  # uint8
+                        val = struct.unpack("<B", fh.read(1))[0]
+                    elif ktype == 1:  # int8
+                        val = struct.unpack("<b", fh.read(1))[0]
+                    elif ktype == 2:  # uint16
+                        val = struct.unpack("<H", fh.read(2))[0]
+                    elif ktype == 3:  # int16
+                        val = struct.unpack("<h", fh.read(2))[0]
+                    elif ktype == 4:  # uint32
+                        val = struct.unpack("<I", fh.read(4))[0]
+                    elif ktype == 5:  # int32
+                        val = struct.unpack("<i", fh.read(4))[0]
+                    elif ktype == 6:  # float32
+                        val = struct.unpack("<f", fh.read(4))[0]
+                    elif ktype == 7:  # bool
+                        val = bool(struct.unpack("<B", fh.read(1))[0])
+                    elif ktype == 8:  # string
+                        slen = struct.unpack("<Q" if ver >= 3 else "<I", fh.read(8 if ver >= 3 else 4))[0]
+                        val = fh.read(int(slen)).decode("utf-8", errors="ignore")
+                    elif ktype == 9:  # array
+                        atype = struct.unpack("<I", fh.read(4))[0]
+                        alen = struct.unpack("<Q" if ver >= 3 else "<I", fh.read(8 if ver >= 3 else 4))[0]
+                        # skip arrays — not needed for presets
+                        if atype == 8:  # string array
+                            for __ in range(int(alen)):
+                                sl = struct.unpack("<Q" if ver >= 3 else "<I", fh.read(8 if ver >= 3 else 4))[0]
+                                fh.read(int(sl))
+                            val = f"<array:{alen}>"
+                        else:
+                            size = {0:1,1:1,2:2,3:2,4:4,5:4,6:4,7:1,10:8,11:8,12:8}.get(atype, 1)
+                            fh.read(int(alen)*size)
+                            val = f"<array:{alen}>"
+                    elif ktype == 10:  # uint64
+                        val = struct.unpack("<Q", fh.read(8))[0]
+                    elif ktype == 11:  # int64
+                        val = struct.unpack("<q", fh.read(8))[0]
+                    elif ktype == 12:  # float64
+                        val = struct.unpack("<d", fh.read(8))[0]
+                    else:
+                        break
+                except Exception:
+                    break
+                # keep only interesting keys
+                if any(key.endswith(s) for s in (".block_count", ".context_length", ".embedding_length", ".feed_forward_length")) \
+                   or key in ("general.architecture", "general.name", "general.parameter_count", "general.quantization_version"):
+                    out[key] = val
+                # early exit after we have architecture + block_count
+                if "general.architecture" in out and any(k.endswith(".block_count") for k in out):
+                    # keep reading a few more but not the whole file
+                    if len(out) > 12:
+                        break
+            return out
+    except Exception:
+        return {}
+
+
+def _auto_preset_load_options(size_gb: float, hardware_gb: float, file_name: str, gguf_meta: dict) -> dict:
+    """Compute Auto preset load_options from hardware + model size + gguf-metadata.
+
+    Matches the UI contract: qwen3-4b on 8GB → gpu_layers 28 + 8k ctx,
+    qwen3-32b on 8GB → 12 layers + 4k, larger VRAM → larger offload/ctx.
+    Other load options (threads, flash_attn, kv quant) are tuned with context.
+    """
+    name = (file_name or "").lower()
+    meta = gguf_meta or {}
+    # parameter count from gguf if available
+    params_b = None
+    for k in ("general.parameter_count", "general.parameter_count", "parameter_count"):
+        if k in meta:
+            try:
+                params_b = float(meta[k]) / 1e9
+                break
+            except Exception:
+                pass
+    # block_count → total layers
+    block_count = None
+    for k, v in meta.items():
+        if k.endswith(".block_count"):
+            try:
+                block_count = int(v)
+                break
+            except Exception:
+                pass
+    est_layers = block_count
+    if not est_layers:
+        if "32b" in name or "30b" in name or (params_b and params_b >= 30) or size_gb > 15:
+            est_layers = 62
+        elif "14b" in name or "13b" in name or (params_b and params_b >= 13):
+            est_layers = 40
+        elif "7b" in name or "8b" in name or (params_b and params_b >= 7):
+            est_layers = 32
+        elif "4b" in name or "3b" in name or "qwen3-4b" in name or (params_b and params_b >= 3):
+            est_layers = 36
+        else:
+            est_layers = 32
+    is_32 = "32b" in name or "30b" in name or (params_b and params_b >= 30) or size_gb > 15
+    is_4 = "4b" in name or "3b" in name or "qwen3-4b" in name or (params_b is not None and 3 <= params_b < 6) or (2 <= size_gb < 6)
+    avail = float(hardware_gb) if hardware_gb else 8.0
+    if is_32:
+        if avail <= 9:
+            gpu_layers, ctx = 12, 4096
+        elif avail <= 16:
+            gpu_layers, ctx = 20, 8192
+        elif avail <= 24:
+            gpu_layers, ctx = min(40, est_layers), 8192
+        else:
+            gpu_layers, ctx = 999, 16384
+    elif is_4:
+        if avail <= 9:
+            gpu_layers, ctx = 28, 8192
+        elif avail <= 16:
+            gpu_layers, ctx = 999, 16384
+        else:
+            gpu_layers, ctx = 999, 32768
+    else:
+        if size_gb + 2.0 <= avail * 0.9:
+            gpu_layers, ctx = 999, 8192
+        elif size_gb + 1.0 <= avail * 1.1:
+            gpu_layers, ctx = min(28, est_layers), 8192
+        else:
+            gpu_layers, ctx = min(12, est_layers), 4096
+    if gpu_layers != 999:
+        gpu_layers = min(gpu_layers, est_layers)
+    out = {"gpu_layers": gpu_layers, "context": ctx, "ctx_size": ctx}
+    # advisory extras
+    out["flash_attn"] = ctx >= 8192
+    if ctx > 16384:
+        out["cache_type_k"] = "q8_0"
+        out["cache_type_v"] = "q8_0"
+    return out
+
+
 # Streaming upstream (llama-server / any OpenAI-compatible provider); module
 # level so tests can inject a fake SSE transport.
 _upstream_stream = requests.post
@@ -1186,6 +1407,53 @@ def create_app(
             "file": str(engines_path(st.engines_file)),
         }
 
+    @app.get("/v1/engines/preset")
+    def engines_preset(file: str = Query(...)):
+        """Auto preset for the Engine profiles section.
+
+        Combines GET /v1/server/status hardware + GET /v1/models/local
+        size_gb + gguf-metadata (parsed from the GGUF header) into a
+        ready-to-apply load_options preset. The Studio's Auto button calls
+        this and then saves the profile. Examples: qwen3-4b on 8GB →
+        gpu_layers 28 + 8k ctx, qwen3-32b → 12 + 4k.
+        """
+        # hardware: available_gb prefers VRAM when present, else RAM
+        hw = _hardware_summary()
+        hardware_gb = float(hw.get("available_gb") or hw.get("vram_gb") or 8.0)
+        # model size + gguf metadata
+        size_gb = 0.0
+        gguf_meta: dict = {}
+        try:
+            models = models_manager.list_local()
+            entry = next((m for m in models if m.get("file") == file), None)
+            if entry is not None:
+                size_gb = float(entry.get("size_gb") or 0)
+            # try GGUF header even if not in list (e.g. absolute path)
+            cand = models_manager.resolve_model(file) if file else None
+            if cand and cand.is_file():
+                gguf_meta = _read_gguf_metadata(cand)
+        except Exception:
+            pass
+        # fallback: infer from file name when model not yet local
+        if size_gb == 0:
+            low = file.lower()
+            if "32b" in low:
+                size_gb = 18.0
+            elif "14b" in low or "13b" in low:
+                size_gb = 8.0
+            elif "7b" in low or "8b" in low:
+                size_gb = 4.5
+            elif "4b" in low:
+                size_gb = 2.5
+        preset = _auto_preset_load_options(size_gb, hardware_gb, file, gguf_meta)
+        return {
+            "file": file,
+            "hardware": hw,
+            "model": {"file": file, "size_gb": size_gb, "gguf_metadata": gguf_meta},
+            "preset": preset,
+            "load_options": preset,
+        }
+
     # ------------------------------------------------------------------
     # Model management (M4): own llama.cpp server + live Hugging Face hub.
     if models_manager is None:
@@ -1253,6 +1521,203 @@ def create_app(
         return prov_name
 
     app.state.register_local = register_local
+
+    # ------------------------------------------------------------------
+    # A/B compare — bench two Engine profiles side-by-side:
+    #   start A on basePort, B on basePort+1, then POST 3 prompts to
+    #   each POST /v1/chat/completions and compare tok/s to determine winner.
+    #   Frontend grid cell uses this via the Bench button and winner badge.
+    # ------------------------------------------------------------------
+    _AB_DEFAULT_PROMPTS = [
+        "Hello, how are you?",
+        "Write a short story about a cat.",
+        "Explain quantum physics briefly.",
+    ]
+
+    def _ab_ensure_started(profile: EngineProfile, port: int) -> str:
+        """Ensure the profile's model is serving on ``port``; return base_url.
+
+        Best-effort: if a server is already on that port, reuse it; if
+        ``load()`` fails because the model is not found or already loaded,
+        still return the constructed URL so the bench can proceed (tests mock
+        the upstream POST). The helper prefers a local GGUF matching the
+        profile name when available.
+        """
+        base_url = f"http://{getattr(models_manager, 'host', '127.0.0.1')}:{port}"
+        try:
+            # already serving on this port?
+            try:
+                stt = models_manager.status()
+                for inst in stt.get("instances", []) or []:
+                    if int(inst.get("port", -1)) == int(port):
+                        return base_url
+            except Exception:
+                pass
+            # pick a model file for the load
+            model_file = None
+            try:
+                local = models_manager.list_local()
+                if local:
+                    for m in local:
+                        f = str(m.get("file") or "")
+                        n = str(m.get("name") or "")
+                        if profile.name.lower() in f.lower() or profile.name.lower() in n.lower():
+                            model_file = f
+                            break
+                    if not model_file:
+                        model_file = local[0].get("file")
+            except Exception:
+                pass
+            opts = profile.load_options if isinstance(profile.load_options, dict) else {}
+            try:
+                ctx_sz = int(opts.get("context") or opts.get("ctx_size") or opts.get("contextLength") or 8192)
+            except Exception:
+                ctx_sz = 8192
+            try:
+                ngl = int(opts.get("gpu_layers") or opts.get("ngl") or 999)
+            except Exception:
+                ngl = 999
+            # attempt load only if not already serving
+            if not any(int(inst.get("port", -1)) == int(port) for inst in (models_manager.status().get("instances", []) or []) if isinstance(inst, dict)):
+                try:
+                    models_manager.load(model=model_file, port=port, ctx_size=ctx_sz, ngl=ngl, extra_args=[])
+                except RuntimeError as exc:
+                    msg = str(exc).lower()
+                    if "already loaded" in msg or "already serving" in msg or "port" in msg or "neither a local" in msg or "not found" in msg:
+                        pass
+                    else:
+                        raise
+        except Exception:
+            pass
+        return base_url
+
+    def _ab_bench_one(base_url: str, prompts: list[str]) -> dict:
+        """POST 3 prompts to ``base_url/v1/chat/completions`` and measure tok/s."""
+        total_tokens = 0
+        total_time = 0.0
+        results: list[dict] = []
+        for prompt in prompts[:3]:
+            payload = {
+                "model": "bench",
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 64,
+            }
+            start = time.time()
+            resp = requests.post(f"{base_url.rstrip('/')}/v1/chat/completions", json=payload, timeout=30)
+            resp.raise_for_status()
+            data = resp.json() if hasattr(resp, "json") else json.loads(resp.text)
+            usage = data.get("usage") if isinstance(data, dict) else {}
+            comp = None
+            if isinstance(usage, dict):
+                comp = usage.get("completion_tokens")
+                if comp is None:
+                    comp = usage.get("completionTokens")
+            if comp is None:
+                try:
+                    content = data["choices"][0]["message"]["content"] or ""
+                    comp = len(str(content).split())
+                except Exception:
+                    comp = 0
+            try:
+                comp = int(comp)
+            except Exception:
+                comp = 0
+            elapsed = max(time.time() - start, 1e-6)
+            tps = comp / elapsed if elapsed else 0
+            total_tokens += comp
+            total_time += elapsed
+            results.append({"prompt": prompt, "tokens": comp, "seconds": round(elapsed, 4), "tok_per_sec": round(tps, 2)})
+        avg = (total_tokens / total_time) if total_time else 0
+        return {"tok_per_sec": avg, "total_tokens": total_tokens, "total_seconds": round(total_time, 4), "results": results}
+
+    async def _ab_handle(request: Request):
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        # flexible profile keys
+        profile_a = body.get("profile_a") or body.get("profileA") or body.get("a") or body.get("A") or body.get("profile_a_name")
+        profile_b = body.get("profile_b") or body.get("profileB") or body.get("b") or body.get("B") or body.get("profile_b_name")
+        base_port_raw = body.get("basePort") if body.get("basePort") is not None else body.get("base_port") if body.get("base_port") is not None else body.get("baseport")
+        prompts = body.get("prompts") or body.get("prompt_list") or _AB_DEFAULT_PROMPTS
+        if isinstance(prompts, str):
+            prompts = [prompts]
+        prompts = [str(p) for p in (prompts or _AB_DEFAULT_PROMPTS)][:3]
+        while len(prompts) < 3:
+            prompts += _AB_DEFAULT_PROMPTS[len(prompts):3]
+        if not profile_a or not profile_b:
+            raise HTTPException(422, "profile_a and profile_b are required")
+        try:
+            eng_a = st.engines.resolve(profile_a)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc))
+        try:
+            eng_b = st.engines.resolve(profile_b)
+        except LookupError as exc:
+            raise HTTPException(404, str(exc))
+        try:
+            bp = int(base_port_raw) if base_port_raw is not None else int(getattr(models_manager, "port", 1234))
+        except Exception:
+            bp = 1234
+        if bp < 1024 or bp > 65534:
+            raise HTTPException(422, "basePort out of range (1024-65534)")
+        port_a = bp
+        port_b = bp + 1
+        # start both on basePort and basePort+1
+        url_a = _ab_ensure_started(eng_a, port_a)
+        url_b = _ab_ensure_started(eng_b, port_b)
+        # bench each — 3 POST /v1/chat/completions, measure tok/s
+        try:
+            res_a = _ab_bench_one(url_a, prompts)
+        except Exception as exc:
+            raise HTTPException(502, f"A bench failed on {url_a}: {exc}")
+        try:
+            res_b = _ab_bench_one(url_b, prompts)
+        except Exception as exc:
+            raise HTTPException(502, f"B bench failed on {url_b}: {exc}")
+        a_tps = float(res_a.get("tok_per_sec") or 0)
+        b_tps = float(res_b.get("tok_per_sec") or 0)
+        if a_tps > b_tps:
+            winner = "A"
+        elif b_tps > a_tps:
+            winner = "B"
+        else:
+            winner = "tie"
+        # small difference within 2% counts as tie (noise)
+        if winner != "tie":
+            mx = max(a_tps, b_tps)
+            if mx and abs(a_tps - b_tps) / mx < 0.02:
+                winner = "tie"
+        return {
+            "winner": winner,
+            "a_tok_per_sec": round(a_tps, 2),
+            "b_tok_per_sec": round(b_tps, 2),
+            "a": {"profile": eng_a.name, "port": port_a, "base_url": url_a, "tok_per_sec": round(a_tps, 2), **res_a},
+            "b": {"profile": eng_b.name, "port": port_b, "base_url": url_b, "tok_per_sec": round(b_tps, 2), **res_b},
+            "basePort": port_a,
+            "base_port": port_a,
+            "port_a": port_a,
+            "port_b": port_b,
+            "prompts": prompts,
+            # aliases for frontend fallbacks
+            "tokens_per_sec_a": round(a_tps, 2),
+            "tokens_per_sec_b": round(b_tps, 2),
+            "profile_a": eng_a.name,
+            "profile_b": eng_b.name,
+        }
+
+    @app.post("/v1/engines/ab/bench")
+    async def engines_ab_bench(request: Request):
+        return await _ab_handle(request)
+
+    @app.post("/v1/engines/bench")
+    async def engines_bench_alias(request: Request):
+        return await _ab_handle(request)
+
+    @app.post("/v1/ab/bench")
+    async def ab_bench_alias(request: Request):
+        return await _ab_handle(request)
 
     agent_service = DshAgentService(
         default_cwd=REPO_ROOT,
@@ -1399,7 +1864,16 @@ def create_app(
 
     @app.get("/v1/server/status")
     def server_status():
-        return models_manager.status()
+        data = models_manager.status()
+        try:
+            data["hardware"] = _hardware_summary()
+        except Exception:
+            data["hardware"] = {
+                "available_gb": 8.0, "total_ram_gb": 8.0,
+                "vram_gb": None, "available_ram_gb": 8.0,
+                "devices": [], "vram_source": "ram",
+            }
+        return data
 
     @app.get("/v1/server/log")
     def server_log(tail: int = 120):
