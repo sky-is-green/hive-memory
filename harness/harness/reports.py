@@ -341,7 +341,6 @@ def render_server_page() -> str:
 <section>
 <h2 style="margin-top:0">Local library <span class="note" id="library-path-note"></span></h2>
 <div class="row"><input type="text" id="library-path" placeholder="C:/Users/you/.lmstudio/models" size="38" style="flex:1"><button onclick="setLibraryPath()">Use this folder</button><span id="import-status" class="note" style="margin-left:.5rem"></span></div>
-<div class="note">Default: LM Studio's <code>.lmstudio\models</code> when it exists, else <code>models/gguf</code> (created for downloads).</div>
 <div class="row" style="margin-top:.6rem"><input type="text" id="library-filter" placeholder="Filter by name…" size="28" style="flex:1" oninput="filterLibrary()"><span class="note" id="library-filter-count" style="margin-left:.5rem"></span></div>
 <div id="local" class="liblist">loading…</div>
 </section>
