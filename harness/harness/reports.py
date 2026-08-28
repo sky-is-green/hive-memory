@@ -246,204 +246,23 @@ def render_runs_page(entries: list[dict]) -> str:
 <html><head><meta charset="utf-8"><title>HiveBench runs</title>
 <style>{_CSS}</style></head><body>
 <h1>HiveBench run bundles</h1>
+<p><a href="/server"><button>← Studio console</button></a> <a href="/docs"><button>API docs</button></a></p>
 <ul class="runs">{items}</ul>
 </body></html>"""
 
 
-_SERVER_CSS = _CSS + """
- /* console overrides: full-bleed three-pane layout */
- body { max-width: none; margin: 0; padding: .8rem 1.2rem;
-        height: 100vh; box-sizing: border-box;
-        display: flex; flex-direction: column; overflow: hidden; }
- h1 { margin: 0 0 .7rem 0; flex: none; }
- section { background: #fff; border-radius: 8px; padding: 1rem 1.4rem;
-           margin: 0 0 1rem 0; box-shadow: 0 1px 3px rgba(16,32,48,.08); }
- /* three panes in fixed proportion — sides 1 part, chat 1.4 parts.
-     Pure fr tracks: every pane keeps its share of the row at ANY
-     viewport width, and each pane scrolls internally instead of
-     forcing the others wider or narrower. */
- .grid { display: grid;
-         grid-template-columns: 1fr 1.4fr 1fr;
-         gap: 1rem; align-items: stretch;
-         flex: 1 1 auto; min-height: 0; }
- @media (max-width: 900px) {
-    /* stacked layout: the page scrolls again and the chat pane keeps the
-       lion's share of the height instead of being squeezed into a sliver */
-    body { overflow-y: auto; }
-    .grid { display: flex; flex-direction: column; }
-    .col { overflow: visible; }
-    .mid { min-height: 75vh; overflow: visible; }
-    .chatpane .chatlog { min-height: 50vh; } }
- .col { min-width: 0; min-height: 0; overflow-y: auto; padding-bottom: 1rem; }
- /* the chat column never scrolls itself: its pane fills the exact space */
- .mid { overflow: hidden; display: flex; flex-direction: column;
-        padding-bottom: 0; }
- .mid .chatpane { margin-bottom: 0; }
- input, button, select { font: inherit; padding: .35rem .6rem;
-        margin: .15rem .3rem .15rem 0; }
- button { cursor: pointer; }
- pre { background: #eef2f6; padding: .7rem; border-radius: 6px;
-       white-space: pre-wrap; word-break: break-word; font-size: .82rem;
-       max-height: 340px; overflow-y: auto; }
- .row { margin: .4rem 0; } .ok { color: #157a3e; font-weight: 600; }
- .bad { color: #b3372c; font-weight: 600; }
- .sugwrap { position: relative; display: inline-block; }
- .sugbox { position: absolute; z-index: 10; left: 0; right: 0; top: 100%;
-           background: #fff; border: 1px solid #cfd8e0; border-radius: 6px;
-           box-shadow: 0 4px 14px rgba(16,32,48,.15); max-height: 260px;
-           overflow-y: auto; margin-top: 2px; }
- .sugbox:empty { display: none; }
- .sugitem { padding: .45rem .6rem; cursor: pointer; font-size: .9rem;
-            display: flex; justify-content: space-between; gap: 1rem; }
- .sugitem:hover, .sugitem.active { background: #eef4fb; }
- .sugitem .meta { color: #5a6b7d; white-space: nowrap; font-size: .8rem; }
- /* chat pane */
- .chatlog { height: 480px; overflow-y: auto; background: #f2f6fa;
-            border: 1px solid #e3eaf1; border-radius: 8px; padding: .8rem;
-            display: flex; flex-direction: column; gap: .5rem; }
- .msg { max-width: 85%; padding: .5rem .75rem; border-radius: 10px;
-        font-size: .92rem; white-space: pre-wrap; word-break: break-word; }
- .msg.user { align-self: flex-end; background: #1f6feb; color: #fff; }
- .msg.ai { align-self: flex-start; background: #fff; border: 1px solid #dde5ec; }
- .msg .meta { display: block; font-size: .72rem; color: #8a99a8;
-              margin-top: .3rem; }
- .msg.user .meta { color: rgba(255,255,255,.75); }
- @keyframes hiveblink { 0%,100% { opacity: .15; } 50% { opacity: 1; } }
- .msg.ai.typing::after { content: '···'; letter-spacing: .18rem;
-        animation: hiveblink 1.1s infinite; }
- .msg.sys { align-self: center; background: #eef2f6; color: #5a6b7d;
-        font-size: .8rem; padding: .25rem .7rem; border-radius: 999px; }
- #chatin { flex: 1; }
- #stopbtn { background: #b3372c; color: #fff; border: none; }
- #afkbtn { min-width: 5.5rem; }
- #afkbtn.afk-on { background: #b3372c; color: #fff; border-color: #b3372c;
-        animation: hiveblink 2.4s infinite; }
- /* inspector */
- .inspector-list { max-height: 300px; overflow-y: auto; }
- .chunkrow { background: #fff; border: 1px solid #e3eaf1; border-radius: 6px;
-        padding: .45rem .7rem; margin: .3rem 0; font-size: .85rem; }
- .chunkrow.sel { border-left: 3px solid #157a3e; }
- .chunkrow.drop { border-left: 3px solid #d4d9de; opacity: .7; }
- .chunkrow .score { float: right; font-weight: 600; font-variant-numeric: tabular-nums; }
- .chunkrow .preview { color: #456; margin-top: .2rem; word-break: break-word; }
- /* settings tabs */
- .tabs { display: flex; gap: .25rem; margin-bottom: .6rem; }
- .tab { border: 1px solid #cfd8e0; background: #eef2f6;
-        border-radius: 6px 6px 0 0; }
- .tab.active { background: #fff; font-weight: 600; border-bottom-color: #fff; }
- .tabpane { animation: fadein .15s ease; }
- @keyframes fadein { from { opacity: .4; } to { opacity: 1; } }
- label.inline { white-space: nowrap; color: #5a6b7d; font-size: .85rem; }
- label.inline input[type="number"], label.inline input[type="text"],
- label.inline select { margin-left: .15rem; }
- label.inline input[type="checkbox"] { vertical-align: middle; }
- details { margin: .3rem 0; }
- summary { cursor: pointer; color: #456; font-size: .88rem; }
- #prov-list input { margin: .12rem .15rem; }
- .liblist .librow { display: flex; justify-content: space-between;
-        align-items: center; gap: .6rem; background: #eef2f6;
-        border-radius: 6px; padding: .35rem .6rem; margin: .25rem 0;
-        font-size: .88rem; }
- .liblist .librow.loaded { outline: 2px solid #157a3e; }
- .librow button { padding: .05rem .5rem; }
- .hint {
-   display: inline-flex; align-items: center; justify-content: center;
-   width: 14px; height: 14px; margin-left: .15rem;
-   border: 1px solid #98a0b3; border-radius: 50%;
-   font-size: 10px; line-height: 1; color: #556;
-   background: #fff; cursor: help; position: relative;
-   user-select: none; flex: none; vertical-align: 1px; }
- .hint:hover, .hint:focus { outline: none; border-color: #22263a; color: #000; }
- .hint::after {
-   content: attr(data-tip);
-   position: absolute; left: -6px; top: calc(100% + 7px); z-index: 40;
-   width: max-content; max-width: 300px;
-   padding: .45rem .6rem; border-radius: 6px;
-   background: #1c1e26; color: #f2f3f7;
-   font-size: .78rem; line-height: 1.35; text-align: left;
-   white-space: normal; letter-spacing: normal;
-   opacity: 0; visibility: hidden; transform: translateY(-4px);
-   transition: opacity .12s ease .18s, transform .12s ease .18s;
-   pointer-events: none;
-   box-shadow: 0 4px 14px rgba(0, 0, 0, .28); }
-  .hint:hover::after, .hint:focus::after {
-    opacity: 1; visibility: visible; transform: none; }
- /* chat pane: one flex column filling its card; transcript grows,
-    every other row stays fixed */
- .chatpane { flex: 1 1 auto; min-height: 0; display: flex;
-             flex-direction: column; }
- .mid .chatpane { margin-bottom: 0; padding-bottom: .9rem; }
- .chatpane .chatlog { flex: 1 1 auto; height: auto; min-height: 220px;
-                      margin-bottom: .6rem; }
- .chat-head { display: flex; justify-content: space-between;
-              align-items: center; gap: .6rem; flex: none;
-              margin: .2rem 0 .6rem; }
- .chat-head h2 { margin: 0; font-size: 1.05rem; white-space: nowrap; }
- .chat-controls { display: flex; align-items: center; gap: .45rem;
-                  flex-wrap: wrap; justify-content: flex-end; }
- .composer { display: flex; gap: .4rem; align-items: center;
-             margin-top: auto; flex: none; }
- .composer-input { flex: 1 1 auto; display: flex; min-width: 0; }
- .composer-input input { width: 100%; min-width: 0; flex: 1; }
- #stopbtn { display: none; }
- /* OpenCode-style session tabs */
- .sesstabs { display: flex; gap: .3rem; flex-wrap: wrap; margin: 0 0 .5rem; }
- .sesstab { border: 1px solid #cfd8e0; background: #eef2f6;
-            border-radius: 6px; padding: .18rem .55rem; font-size: .84rem;
-            cursor: pointer; display: inline-flex; align-items: center;
-            gap: .45rem; max-width: 15rem; }
- .sesstab .name { overflow: hidden; text-overflow: ellipsis;
-                  white-space: nowrap; }
- .sesstab.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
- .sesstab.unsaved .name::after { content: " •"; opacity: .7; }
- .sesstab .x { opacity: .55; font-weight: 700; padding: 0 .1rem; }
- .sesstab .x:hover { opacity: 1; }
- /* persistent agent tool steps (collapsible, stay in the transcript) */
- .toolstep { align-self: flex-start; max-width: 85%; background: #fff;
-             border: 1px dashed #cfd8e0; border-radius: 8px;
-             font-size: .82rem; }
- .toolstep summary { padding: .3rem .6rem; cursor: pointer; color: #456; }
- .toolstep pre { margin: .35rem .6rem; max-height: 180px; background: #f7fafc; }
- /* ---- HiveBench palette --------------------------------------------
-    black canvas · amber containers · black text inside containers ·
-    yellow text outside containers · red-orange borders --------------- */
- body { background: #000000; color: #FFDD00; }
- h1 { color: #FFDD00; }
- section { background: #FFB703; border: 2.4px solid #FB8500; color: #000000;
-           box-shadow: 0 1px 6px rgba(251,133,0,.22); }
- section h2 { color: #000000; }
- section .note, section label.inline, section summary { color: rgba(0,0,0,.72); }
- section b { color: #000000; }
- input, select, textarea { background: #ffffff; color: #000000;
-        border: 1.2px solid #FB8500; border-radius: 4px; }
- button { background: #ffffff; color: #000000;
-          border: 1.2px solid #FB8500; border-radius: 4px; }
- button:hover:not(:disabled) { background: #ffedd1; }
- #stopbtn { background: #b3372c; color: #fff; border: none; }
- pre { background: #fff8ec; color: #000000; border: 1.2px solid #FB8500; }
- .chatlog { background: #fffdf7; border: 1.2px solid #FB8500; }
- .msg { transition: box-shadow .15s ease; }
- .msg.user { background: #000000; color: #FFDD00;
-             box-shadow: 0 6px 16px rgba(0,0,0,.55),
-                         0 0 0 2px #FFDD00,
-                         0 0 20px rgba(0,0,0,.30); }
- .msg.ai { background: #ffffff; border: 1.2px solid #FB8500;
-           box-shadow: 0 6px 16px rgba(251,133,0,.45),
-                       0 0 18px rgba(251,133,0,.30); }
- .msg.sys { background: rgba(0,0,0,.08); color: #000000; }
- .tab { border-color: #FB8500; border-width: 1.2px; background: #ffe9c8; color: #000; }
- .tab.active { background: #ffffff; border-bottom-color: #ffffff; }
- .sesstab { border-color: #FB8500; border-width: 1.2px; background: #ffe9c8; color: #000;
-            transition: box-shadow .15s ease, transform .15s ease; }
- .sesstab:hover { transform: translateY(-1px); }
- .sesstab.active { background: #000000; border-color: #000000; color: #FFDD00;
-                   transform: translateY(-2px);
-                   box-shadow: 0 6px 16px rgba(0,0,0,.55),
-                               0 0 0 2.5px #FFDD00,
-                               0 0 24px rgba(0,0,0,.30); }
- .hint { background: #ffffff; color: #553300; border-color: #7a4a00; }
- .toolstep { background: #ffffff; border: 1.2px dashed #FB8500; }
- """
+_STUDIO_CSS_PATH = Path(__file__).with_name("studio.css")
+
+def _get_server_css() -> str:
+    """Studio CSS: base + studio overrides, re-read on each request so refresh picks up edits without restart."""
+    try:
+        extra = _STUDIO_CSS_PATH.read_text(encoding="utf-8")
+    except OSError:
+        extra = ""
+    return _CSS + extra
+
+# Backwards compat: keep _SERVER_CSS as snapshot at import, but renderers call _get_server_css()
+_SERVER_CSS = _get_server_css()
 
 
 def tip(text: str) -> str:
@@ -457,10 +276,11 @@ def render_server_page() -> str:
     Discovery is live against the Hugging Face hub API — no model catalog is
     hardcoded here."""
     return f"""<!doctype html>
-<html><head><meta charset="utf-8"><title>Studio server &amp; models</title>
-<style>{_SERVER_CSS}</style></head><body>
+<html><head><meta charset="utf-8"><meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"><meta http-equiv="Pragma" content="no-cache"><meta http-equiv="Expires" content="0"><title>Studio server &amp; models</title>
+<style>{_get_server_css()}</style></head><body>
+<div style="background:#000;color:#FFDD00;padding:.4rem .8rem;margin:-1rem -1.2rem 1rem -1.2rem;text-align:center;font-weight:700;letter-spacing:.04rem">STUDIO v4 — stronger shadow + stable library — {len(_get_server_css())}b CSS</div>
 <h1>Hive Studio console</h1>
-<p style="margin:.3rem 0"><button id="afkbtn" onclick="toggleAfk(this)">AFK</button>{tip('AFK mode: human away - QUEEN runs expanded autonomy (GREEN/YELLOW fixes, regen, HIVE-PLAN orders). Public pushes/merges/policy changes queue for return; RED defects contained and logged.')}</p>
+<p style="margin:.3rem 0"><button id="afkbtn" onclick="toggleAfk(this)">AFK</button>{tip('AFK mode: human away - QUEEN runs expanded autonomy (GREEN/YELLOW fixes, regen, HIVE-PLAN orders). Public pushes/merges/policy changes queue for return; RED defects contained and logged.')} <a href="/runs"><button>Runs →</button></a> <a href="/docs"><button>API docs</button></a></p>
 <form style="display:inline" onsubmit="event.preventDefault(); return false"><input id="researchq" placeholder="deep-research question..." size="30" autocomplete="off" onkeydown="if (event.key === &quot;Enter&quot;) researchAdd(this)"> <button id="researchsubmit" onclick="researchAdd(this)">Research</button> <span id="researchcount" class="meta"></span>{tip('Queues a deep-research question for QUEEN. Execution is master-only; reports land in RESEARCH/<slug>.md and are summarized on wake.')}</form>
 
 <div class="grid">
@@ -468,55 +288,14 @@ def render_server_page() -> str:
 <!-- ==================== LEFT: tabs ==================== -->
 <div class="col">
 <div class="tabs">
-<button class="tab active" data-tab="tab-server">Server</button>
-<button class="tab" data-tab="tab-engines">Engines</button>
+<button class="tab active" data-tab="tab-engines">Engines</button>
 <button class="tab" data-tab="tab-hive">Hive</button>
 <button class="tab" data-tab="tab-providers">Providers</button>
+<button class="tab" data-tab="tab-hub">Hub</button>
+<button class="tab" data-tab="tab-inspect">Inspector</button>
 </div>
 
-<div id="tab-server" class="tabpane">
-<section>
-<h2 style="margin-top:0">Launch</h2>
-<div class="row"><button onclick="api('/v1/server/status').then(s => show('status', s))">Refresh</button>
-<button onclick="api('/v1/server/stop', 'POST').then(() => refresh())">Stop</button></div>
-<div class="row">
-<span class="sugwrap"><input id="model" placeholder="local model (blank = ok w/ hf)" size="26" list="local-suggestions">
-<datalist id="local-suggestions"></datalist></span>{tip('Local GGUF (models/gguf) to serve; leave blank to rely on the hub fields below.')}
-<label class="inline">ctx {tip('Context window in tokens llama-server serves; caps prompt + reply together.')} <input id="ctx" type="number" value="8192" size="4"></label>
-<label class="inline">gpu {tip('Model layers offloaded to the GPU. 999 = every layer (needs enough VRAM); lower it if you run out.')} <input id="ngl" type="number" value="999" size="3"></label>
-<label class="inline">api-key {tip('Bearer token llama-server expects on requests; leave blank when none is set.')} <input id="l-apikey" size="10" placeholder="(none)"></label><br>
-<span class="sugwrap"><input id="hfrepo" placeholder="--hf-repo (type to search)" size="30">
-<div class="sugbox" id="sug-hfrepo"></div></span>
-<input id="hffile" placeholder="--hf-file" size="18">{tip('Hugging Face source: repo id plus the exact GGUF filename inside it.')}
-<button onclick="startServer(this)">Start</button></div>
-<details><summary>Advanced launch flags</summary>
-<div class="row">
-<label class="inline">threads {tip('CPU threads for inference; blank = automatic.')} <input id="l-threads" type="number" size="3" placeholder="auto"></label>
-<label class="inline"><input id="l-fa" type="checkbox"> flash-attn {tip('FlashAttention kernels: faster attention and lower VRAM at long context.')}</label>
-<label class="inline">parallel {tip('Requests decoded concurrently; each slot shares the context window.')} <input id="l-parallel" type="number" size="2" placeholder="1"></label>
-<label class="inline"><input id="l-mlock" type="checkbox"> mlock {tip('Lock model weights in RAM so they never page to disk; slower startup.')}</label>
-<label class="inline"><input id="l-nommap" type="checkbox"> no-mmap {tip('Read weights fully into memory instead of memory-mapping the file.')}</label>
-</div>
-<div class="row">
-<label class="inline">kv-K {tip('Quantize the attention key cache to save VRAM (small quality cost).')} <select id="l-ctk"><option value="">f16</option><option>q8_0</option><option>q4_0</option></select></label>
-<label class="inline">kv-V {tip('Same quantization for the value cache.')} <select id="l-ctv"><option value="">f16</option><option>q8_0</option><option>q4_0</option></select></label>
-<label class="inline">batch {tip('Logical prompt-processing batch size.')} <input id="l-batch" type="number" size="4" placeholder="512"></label>
-<label class="inline">ubatch {tip('Physical micro-batch fed to the model per step.')} <input id="l-ubatch" type="number" size="4" placeholder="512"></label>
-<label class="inline">alias {tip('Model id exposed on /v1/models instead of the file path.')} <input id="l-alias" size="14" placeholder="model id"></label>
-</div>
-</details>
-<pre id="status">loading…</pre>
-<div id="instances"></div>
-<pre id="srvlog" title="llama_server.log tail">log: loading…</pre>
-</section>
-
-<section>
-<h2 style="margin-top:0">Local library <span class="note">(models/gguf)</span></h2>
-<div id="local" class="liblist">loading…</div>
-</section>
-</div>
-
-<div id="tab-engines" class="tabpane" style="display:none">
+<div id="tab-engines" class="tabpane">
 <section>
 <h2 style="margin-top:0">Engine profiles</h2>
 <div class="row">
@@ -531,6 +310,7 @@ def render_server_page() -> str:
 <option>ollama</option><option>hosted</option></select></label>
 </div>
 <div class="row"><input id="eng-url" placeholder="base_url" style="width:95%" oninput="engDirty=true">{tip('OpenAI-compatible endpoint root, e.g. http://localhost:1234/v1')}</div>
+<div class="row"><span class="note">Selected model: <b id="eng-model-display">—</b></span><span id="eng-model-note" class="note" style="margin-left:.5rem"></span></div>
 <details open><summary>Sampling defaults (every request)</summary>
 <div class="row">
 <label class="inline">temp {tip('Randomness: higher = more varied, lower = more focused.')} <input id="s-temp" type="number" step="0.05" min="0" max="2" size="4" oninput="engDirty=true"></label>
@@ -556,6 +336,14 @@ def render_server_page() -> str:
 </details>
 <div class="row"><span id="eng-msg" class="note"></span>
 <button onclick="saveEngines()" id="eng-save">Save engines</button></div>
+</section>
+
+<section>
+<h2 style="margin-top:0">Local library <span class="note" id="library-path-note"></span></h2>
+<div class="row"><input type="text" id="library-path" placeholder="C:/Users/you/.lmstudio/models" size="38" style="flex:1"><button onclick="setLibraryPath()">Use this folder</button><span id="import-status" class="note" style="margin-left:.5rem"></span></div>
+<div class="note">Default: LM Studio's <code>.lmstudio\models</code> when it exists, else <code>models/gguf</code> (created for downloads).</div>
+<div class="row" style="margin-top:.6rem"><input type="text" id="library-filter" placeholder="Filter by name…" size="28" style="flex:1" oninput="filterLibrary()"><span class="note" id="library-filter-count" style="margin-left:.5rem"></span></div>
+<div id="local" class="liblist">loading…</div>
 </section>
 </div>
 
@@ -602,6 +390,10 @@ def render_server_page() -> str:
 <section>
 <h2 style="margin-top:0">Providers <span class="note">(OpenAI-compatible)</span></h2>
 <div id="prov-list"></div>
+
+
+
+
 <div class="row">
 <button onclick="providerAdd()">+ Add provider</button>
 <button onclick="saveProviders()">Save providers</button>
@@ -611,6 +403,38 @@ stored secret; type a new key to replace it. Saved to
 providers.local.json (gitignored).</div>
 </section>
 </div>
+
+<div id="tab-hub" class="tabpane" style="display:none">
+<section>
+<h2 style="margin-top:0">Hugging Face hub <span class="note">(live)</span></h2>
+<div class="row"><span class="sugwrap" style="width:100%"><input id="q" placeholder="search gguf repos…" style="width:100%">
+<div class="sugbox" id="sug-q"></div></span></div>
+<datalist id="repo-suggestions"></datalist>
+<pre id="hub">(search above)</pre>
+<div class="row"><span class="sugwrap" style="width:100%"><input id="drepo" placeholder="repo id (type for suggestions)" style="width:100%">
+<div class="sugbox" id="sug-drepo"></div></span><br>
+<input id="dfile" placeholder="file.gguf" size="24">{tip('Exact GGUF filename inside that repo (copy it from the search results).')}
+<button onclick="download(this)">Download</button></div>
+<pre id="downloads"></pre>
+</section>
+</div>
+
+<div id="tab-inspect" class="tabpane" style="display:none">
+<section>
+<h2 style="margin-top:0">Prompt inspector <span class="note">(last turn)</span></h2>
+<div id="inspect-summary" class="kv-grid"></div>
+<h2 style="font-size:.95rem;margin-top:1rem">Selected chunks (in the context)</h2>
+<div id="inspect-selected" class="inspector-list"></div>
+<h2 style="font-size:.95rem;margin-top:1rem">Dropped chunks <span class="note" id="inspect-dropped-n"></span></h2>
+<div id="inspect-dropped" class="inspector-list"></div>
+<h2 style="font-size:.95rem;margin-top:1rem">Assembled context (preview)</h2>
+<pre id="inspect-assembled" style="max-height:200px"></pre>
+<h2 style="font-size:.95rem;margin-top:1rem">Stage timings</h2>
+<pre id="inspect-timings"></pre>
+</section>
+</div>
+
+
 </div>
 
 <!-- ==================== MIDDLE: loaded AI chat ==================== -->
@@ -644,43 +468,45 @@ turns, durable session log.</div>
 </section>
 </div>
 
-<!-- ==================== FAR RIGHT: hub + inspector tabs ============ -->
+<!-- ==================== RIGHT: Server (standalone, no tabs) ==================== -->
 <div class="col">
-<div class="tabs">
-<button class="tab active" data-rtab="rtab-hub">Hub</button>
-<button class="tab" data-rtab="rtab-inspect">Inspector</button>
-</div>
-<div id="rtab-hub" class="tabpane">
 <section>
-<h2 style="margin-top:0">Hugging Face hub <span class="note">(live)</span></h2>
-<div class="row"><span class="sugwrap" style="width:100%"><input id="q" placeholder="search gguf repos…" style="width:100%">
-<div class="sugbox" id="sug-q"></div></span></div>
-<datalist id="repo-suggestions"></datalist>
-<pre id="hub">(search above)</pre>
-<div class="row"><span class="sugwrap" style="width:100%"><input id="drepo" placeholder="repo id (type for suggestions)" style="width:100%">
-<div class="sugbox" id="sug-drepo"></div></span><br>
-<input id="dfile" placeholder="file.gguf" size="24">{tip('Exact GGUF filename inside that repo (copy it from the search results).')}
-<button onclick="download(this)">Download</button></div>
-<pre id="downloads"></pre>
+<h2 style="margin-top:0">Launch</h2>
+<div class="row"><button onclick="api('/v1/server/status').then(s => show('status', s))">Refresh</button>
+<button onclick="api('/v1/server/stop', 'POST').then(() => refresh())">Stop</button></div>
+<div class="row">
+<label class="inline" style="flex:1">Model <select id="launch-model-select" style="flex:1;min-width:220px"><option value="">— choose local model —</option></select></label>
+<span class="sugwrap"><input id="model" placeholder="or type path" size="18" list="local-suggestions">
+<datalist id="local-suggestions"></datalist></span>{tip('Pick from Local library dropdown or type a GGUF path; blank uses Hugging Face repo/file below.')}
+<label class="inline">ctx {tip('Context window in tokens llama-server serves; caps prompt + reply together.')} <input id="ctx" type="number" value="8192" size="4"></label>
+<label class="inline">gpu {tip('Model layers offloaded to the GPU. 999 = every layer (needs enough VRAM); lower it if you run out.')} <input id="ngl" type="number" value="999" size="3"></label>
+<label class="inline">api-key {tip('Bearer token llama-server expects on requests; leave blank when none is set.')} <input id="l-apikey" size="10" placeholder="(none)"></label><br>
+<span class="sugwrap"><input id="hfrepo" placeholder="--hf-repo (type to search)" size="30">
+<div class="sugbox" id="sug-hfrepo"></div></span>
+<input id="hffile" placeholder="--hf-file" size="18">{tip('Hugging Face source: repo id plus the exact GGUF filename inside it.')}
+<button onclick="startServer(this)">Start</button></div>
+<details><summary>Advanced launch flags</summary>
+<div class="row">
+<label class="inline">threads {tip('CPU threads for inference; blank = automatic.')} <input id="l-threads" type="number" size="3" placeholder="auto"></label>
+<label class="inline"><input id="l-fa" type="checkbox"> flash-attn {tip('FlashAttention kernels: faster attention and lower VRAM at long context.')}</label>
+<label class="inline">parallel {tip('Requests decoded concurrently; each slot shares the context window.')} <input id="l-parallel" type="number" size="2" placeholder="1"></label>
+<label class="inline"><input id="l-mlock" type="checkbox"> mlock {tip('Lock model weights in RAM so they never page to disk; slower startup.')}</label>
+<label class="inline"><input id="l-nommap" type="checkbox"> no-mmap {tip('Read weights fully into memory instead of memory-mapping the file.')}</label>
+</div>
+<div class="row">
+<label class="inline">kv-K {tip('Quantize the attention key cache to save VRAM (small quality cost).')} <select id="l-ctk"><option value="">f16</option><option>q8_0</option><option>q4_0</option></select></label>
+<label class="inline">kv-V {tip('Same quantization for the value cache.')} <select id="l-ctv"><option value="">f16</option><option>q8_0</option><option>q4_0</option></select></label>
+<label class="inline">batch {tip('Logical prompt-processing batch size.')} <input id="l-batch" type="number" size="4" placeholder="512"></label>
+<label class="inline">ubatch {tip('Physical micro-batch fed to the model per step.')} <input id="l-ubatch" type="number" size="4" placeholder="512"></label>
+<label class="inline">alias {tip('Model id exposed on /v1/models instead of the file path.')} <input id="l-alias" size="14" placeholder="model id"></label>
+</div>
+</details>
+<pre id="status">loading…</pre>
+<div id="instances"></div>
+<pre id="srvlog" title="llama_server.log tail">log: loading…</pre>
 </section>
-</div>
-<div id="rtab-inspect" class="tabpane" style="display:none">
-<section>
-<h2 style="margin-top:0">Prompt inspector <span class="note">(last turn)</span></h2>
-<div id="inspect-summary" class="kv-grid"></div>
-<h2 style="font-size:.95rem;margin-top:1rem">Selected chunks (in the context)</h2>
-<div id="inspect-selected" class="inspector-list"></div>
-<h2 style="font-size:.95rem;margin-top:1rem">Dropped chunks <span class="note" id="inspect-dropped-n"></span></h2>
-<div id="inspect-dropped" class="inspector-list"></div>
-<h2 style="font-size:.95rem;margin-top:1rem">Assembled context (preview)</h2>
-<pre id="inspect-assembled" style="max-height:200px"></pre>
-<h2 style="font-size:.95rem;margin-top:1rem">Stage timings</h2>
-<pre id="inspect-timings"></pre>
-</section>
-</div>
-</div>
 
-</div>
+</div></div>
 
 <script>
 let convId = localStorage.getItem('hive-console-conv');
@@ -1313,6 +1139,53 @@ async function download(btn) {{
   }} finally {{ if (btn) btn.disabled = false; }}
 }}
 
+async function setLibraryPath() {{
+  const input = document.getElementById('library-path');
+  const folder = input.value.trim();
+  const status = document.getElementById('import-status');
+  if (!folder) {{ status.textContent = 'enter a folder path'; setTimeout(()=>status.textContent='',2000); return; }}
+  status.textContent = `switching to ${{folder}}…`;
+  try {{
+    const r = await fetch('/v1/models/local/path', {{method: 'POST', headers: {{'content-type':'application/json'}}, body: JSON.stringify({{folder}})}});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || j.error || await r.text());
+    status.textContent = `now using ${{j.models_dir}} (${{j.models?.length || 0}} models)`;
+    document.getElementById('library-path-note').textContent = j.models_dir;
+    refresh();
+  }} catch (e) {{
+    status.textContent = 'failed: ' + e.message;
+  }} finally {{
+    setTimeout(()=>status.textContent='',4000);
+  }}
+}}
+
+function filterLibrary() {{
+  const q = (document.getElementById('library-filter').value || '').toLowerCase().trim();
+  const wrap = document.getElementById('local');
+  let visible = 0;
+  for (const row of wrap.children) {{
+    const name = (row.dataset.file || '').toLowerCase();
+    const show = !q || name.includes(q);
+    row.style.display = show ? '' : 'none';
+    if (show) visible++;
+  }}
+  const count = document.getElementById('library-filter-count');
+  if (count) count.textContent = q ? `${{visible}} / ${{wrap.children.length}}` : '';
+  // Also filter the Engine and Launch dropdowns
+  const engSel = document.getElementById('eng-model-select');
+  const launchSel = document.getElementById('launch-model-select');
+  const filterSelect = (sel) => {{
+    if (!sel) return;
+    for (const opt of sel.options) {{
+      if (!opt.value) continue;
+      opt.style.display = !q || opt.value.toLowerCase().includes(q) ? '' : 'none';
+      opt.hidden = !q || opt.value.toLowerCase().includes(q) ? false : true;
+    }}
+  }};
+  filterSelect(engSel);
+  filterSelect(launchSelect);
+}}
+
 /* --------------------------- engines tab ----------------------------- */
 let engines = [];
 let engDefault = '';
@@ -1694,21 +1567,77 @@ async function refresh() {{
     if (l.lines.length) show('srvlog', l.lines.join('\\n'));
   }}).catch(() => {{}});
   api('/v1/models/local').then(l => {{
+    console.log('local fetch ok', l.models_dir, l.models?.length);
+    const pathInput = document.getElementById('library-path');
+    const pathNote = document.getElementById('library-path-note');
+    if (l.models_dir) {{
+      if (!pathInput.value) pathInput.value = l.models_dir;
+      pathNote.textContent = `(${{l.models_dir}})`;
+    }}
     const wrap = document.getElementById('local');
+    const engDisplay = document.getElementById('eng-model-display');
+    const launchSelect = document.getElementById('launch-model-select');
+    const engNote = document.getElementById('eng-model-note');
+    if (launchSelect) launchSelect.innerHTML = '<option value="">— choose local model —</option>';
+    for (const m of l.models) {{
+      const shortName = m.file.split('/').pop().split('\\\\').pop();
+      if (launchSelect) {{
+        const o2 = document.createElement('option');
+        o2.value = m.file;
+        o2.textContent = shortName;
+        launchSelect.appendChild(o2);
+      }}
+    }}
+    const prevLaunch = launchSelect ? launchSelect.value : '';
+    if (launchSelect) {{
+      if (prevLaunch && l.models.some(m => m.file === prevLaunch)) launchSelect.value = prevLaunch;
+      else if (l.models.length === 1) launchSelect.value = l.models[0].file;
+    }}
+    const updateEngModel = () => {{
+      const v = window._selectedFile || (launchSelect ? launchSelect.value : '');
+      const short = v ? v.split('/').pop().split('\\\\').pop() : '—';
+      if (engDisplay) engDisplay.textContent = short;
+      if (engNote) engNote.textContent = v ? `selected: ${{short}}` : '';
+      // Keep launchSelect in sync with _selectedFile
+      if (launchSelect && v && launchSelect.value !== v) {{
+        // Ensure option exists even if filtered
+        let opt = [...launchSelect.options].find(o=>o.value===v);
+        if (!opt) {{
+          opt = document.createElement('option'); opt.value=v; opt.textContent=short; launchSelect.appendChild(opt);
+        }}
+        launchSelect.value = v;
+      }}
+      for (const row of wrap.children) {{
+        const isSel = row.dataset.file === v;
+        row.classList.toggle('selected', isSel);
+        row.style.background = isSel ? '#000000' : '';
+        row.style.color = isSel ? '#FFDD00' : '';
+        row.style.borderColor = isSel ? '#FFDD00' : '';
+        row.style.boxShadow = isSel ? '0 0 10px rgba(255,221,0,0.5)' : '';
+      }}
+      const launchModel = document.getElementById('model');
+      if (launchModel && v) launchModel.value = v;
+      console.log('updateEngModel v', v, 'selected', v ? 'yes' : 'none');
+    }};
+    if (launchSelect) launchSelect.onchange = () => {{ window._selectedFile = launchSelect.value || null; updateEngModel(); }};
     wrap.innerHTML = '';
     if (!l.models.length) {{
       wrap.textContent = '(no .gguf files yet)';
+      if (engNote) engNote.textContent = '';
       return;
     }}
     for (const m of l.models) {{
       const row = document.createElement('div');
       row.className = 'librow';
+      row.dataset.file = m.file;
       const label = document.createElement('span');
-      label.textContent = `${{m.file}} — ${{m.size_gb}} GB`;
+      const short = m.file.split('/').pop().split('\\\\').pop();
+      label.textContent = `${{short}} — ${{m.size_gb}} GB`;
       const del = document.createElement('button');
       del.textContent = 'delete';
       del.title = 'remove from disk';
-      del.addEventListener('click', async () => {{
+      del.addEventListener('click', async (e) => {{
+        e.stopPropagation();
         if (!confirm('Delete ' + m.file + ' from disk?')) return;
         try {{
           await api('/v1/models/local?file=' + encodeURIComponent(m.file),
@@ -1716,11 +1645,37 @@ async function refresh() {{
           refresh();
         }} catch (e) {{ alert(String(e)); }}
       }});
+      // Click row = select model (also long-press visual)
+      let pressTimer = null;
+      const setPressed = (on) => row.classList.toggle('pressed', on);
+      row.addEventListener('mousedown', () => {{ pressTimer = setTimeout(()=>setPressed(true), 400); }});
+      row.addEventListener('mouseup', () => {{ clearTimeout(pressTimer); setPressed(false); }});
+      row.addEventListener('mouseleave', () => {{ clearTimeout(pressTimer); setPressed(false); }});
+      row.addEventListener('touchstart', () => {{ pressTimer = setTimeout(()=>setPressed(true), 400); }}, {{passive:true}});
+      row.addEventListener('touchend', () => {{ clearTimeout(pressTimer); setPressed(false); }});
+      row.addEventListener('click', (e) => {{
+        e.stopPropagation();
+        console.log('row click', m.file);
+        if (launchSelect) {{
+          launchSelect.value = m.file;
+          // Ensure the option is visible even if filtered
+          for (const opt of launchSelect.options) {{ if (opt.value === m.file) {{ opt.hidden = false; opt.style.display = ''; }} }}
+        }}
+        if (window._selectedFile !== m.file) window._selectedFile = m.file;
+        else window._selectedFile = null; // toggle off if same file clicked again? No, keep selected
+        // Actually, toggle behaviour: if already selected, keep it selected (don't unselect)
+        // So we set _selectedFile to m.file and call update
+        window._selectedFile = m.file;
+        updateEngModel();
+      }});
       row.appendChild(label);
       row.appendChild(del);
       wrap.appendChild(row);
     }}
-  }}).catch(e => {{ document.getElementById('local').textContent = String(e); }});
+    // Restore selection from _selectedFile if exists
+    if (window._selectedFile && launchSelect) launchSelect.value = window._selectedFile;
+    updateEngModel();
+  }}).catch(e => {{ console.error('local fetch failed', e); const w=document.getElementById('local'); if(w) w.textContent = 'load failed: ' + String(e).slice(0,200); }});
   api('/v1/models/hub/downloads').then(d => {{
     const lines = d.downloads.map(j => `${{j.filename}}: ${{j.state}} (${{j.elapsed_s}}s)`);
     if (lines.length) show('downloads', lines.join('\\n'));

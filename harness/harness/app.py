@@ -35,11 +35,11 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 
 import psutil
 import requests
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel
@@ -1563,6 +1563,90 @@ def create_app(
     def local_models():
         return {"models_dir": str(models_manager.models_dir),
                 "models": models_manager.list_local()}
+
+    @app.post("/v1/models/local/import")
+    async def import_local_models(files: List[UploadFile] = File(...)):
+        """Import GGUF files from a local folder (webkitdirectory upload).
+
+        Accepts multiple .gguf files via multipart/form-data; preserves
+        webkitRelativePath subfolders when present, path-traversal safe.
+        """
+        imported: List[str] = []
+        errors: List[str] = []
+        root = models_manager.models_dir.resolve()
+        for f in files:
+            filename = (f.filename or "").strip()
+            if not filename:
+                continue
+            if not filename.lower().endswith(".gguf"):
+                errors.append(f"{filename}: not a .gguf file")
+                continue
+            # webkitRelativePath may be like "my-models/sub/model.gguf"
+            p = Path(filename)
+            if p.is_absolute() or ".." in p.parts:
+                errors.append(f"{filename}: invalid path")
+                continue
+            # Resolve destination: try preserving relative path, fallback to basename
+            dest = (models_manager.models_dir / p).resolve()
+            if root not in dest.parents and dest != root:
+                dest = (models_manager.models_dir / p.name).resolve()
+                if root not in dest.parents and dest != root:
+                    errors.append(f"{filename}: path traversal detected")
+                    continue
+            try:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                with dest.open("wb") as out:
+                    while True:
+                        chunk = await f.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                try:
+                    rel = str(dest.relative_to(root))
+                except ValueError:
+                    rel = dest.name
+                imported.append(rel)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{filename}: {exc}")
+        return {"imported": imported, "errors": errors, "models_dir": str(models_manager.models_dir)}
+
+    @app.post("/v1/models/local/import-path")
+    async def import_local_path(request: Request):
+        """Link an external folder without copying (instant)."""
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(422, "invalid JSON")
+        folder = str(body.get("folder") or "").strip()
+        if not folder:
+            raise HTTPException(422, "folder is required")
+        try:
+            return models_manager.import_local_path(folder)
+        except FileNotFoundError as exc:
+            raise HTTPException(404, str(exc))
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(400, str(exc))
+
+    @app.post("/v1/models/local/path")
+    async def set_local_path(request: Request):
+        """Point the library at a chosen folder (no copy, instant).
+
+        Default is LM Studio's ``.lmstudio/models`` when it exists, else
+        ``models/gguf`` (created for Hugging Face downloads).
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(422, "invalid JSON")
+        folder = str(body.get("folder") or body.get("path") or "").strip()
+        if not folder:
+            raise HTTPException(422, "folder is required")
+        try:
+            return models_manager.set_models_dir(folder)
+        except FileNotFoundError as exc:
+            raise HTTPException(404, str(exc))
+        except (NotADirectoryError, PermissionError, ValueError, RuntimeError, OSError) as exc:
+            raise HTTPException(400, str(exc))
 
     @app.get("/v1/models/hub")
     def hub_search(q: str = "", limit: int = 12):

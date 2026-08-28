@@ -34,6 +34,28 @@ import requests
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HF_API = "https://huggingface.co/api"
 
+# LM Studio default models location (Windows) — checked first
+def _lmstudio_models_dir() -> Optional[Path]:
+    candidates = [
+        Path.home() / ".lmstudio" / "models",
+        Path.home() / ".cache" / "lm-studio" / "models",
+        Path(os.environ.get("LOCALAPPDATA", "")) / "LM Studio" / "models",
+        Path(os.environ.get("APPDATA", "")) / "LM Studio" / "models",
+    ]
+    for p in candidates:
+        if p.is_dir():
+            return p
+    return None
+
+def _default_models_dir() -> Path:
+    lm = _lmstudio_models_dir()
+    if lm and lm.is_dir():
+        return lm
+    # Fallback: repo's own models/gguf (created on demand, also used for HF downloads)
+    fallback = REPO_ROOT / "models" / "gguf"
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
+
 
 def _default_binary() -> Path:
     """HARNESS_LLAMA_SERVER override > tools/llama.cpp/llama-server(.exe)."""
@@ -232,8 +254,22 @@ class LlamaServerManager:
         startup_timeout: float = 300.0,
     ) -> None:
         self.binary = Path(binary) if binary else _default_binary()
-        self.models_dir = Path(models_dir) if models_dir \
-            else REPO_ROOT / "models" / "gguf"
+        # Persisted override from previous directory selection
+        persisted: Optional[Path] = None
+        try:
+            cfg = REPO_ROOT / "harness_state" / "models_dir.txt"
+            if cfg.is_file():
+                p = Path(cfg.read_text(encoding="utf-8").strip())
+                if p.is_dir():
+                    persisted = p
+        except OSError:
+            pass
+        if models_dir is not None:
+            self.models_dir = Path(models_dir)
+        elif persisted is not None:
+            self.models_dir = persisted
+        else:
+            self.models_dir = _default_models_dir()
         self.models_dir.mkdir(parents=True, exist_ok=True)
         self.host = host
         self.port = port
@@ -263,15 +299,102 @@ class LlamaServerManager:
     def list_local(self) -> list[dict]:
         entries = []
         for p in sorted(self.models_dir.rglob("*.gguf")):
-            stat = p.stat()
+            try:
+                stat = p.stat()
+            except OSError:
+                continue
+            try:
+                rel = str(p.relative_to(self.models_dir))
+            except ValueError:
+                rel = p.name
             entries.append({
                 "name": p.stem,
-                "file": str(p.relative_to(self.models_dir)),
+                "file": rel,
                 "size_gb": round(stat.st_size / (1024 ** 3), 2),
                 "modified": time.strftime("%Y-%m-%d %H:%M",
                                           time.localtime(stat.st_mtime)),
             })
         return sorted(entries, key=lambda e: e["modified"], reverse=True)
+
+    def import_local_path(self, folder: str) -> dict:
+        """Link an external folder into the library without copying (instant).
+
+        Creates a directory junction/symlink at ``models_dir/<folder-name>``
+        pointing at ``folder`` so ``list_local`` finds its .gguf files via
+        the existing rglob. No file contents are copied.
+        """
+        src = Path(folder).expanduser().resolve()
+        if not src.is_dir():
+            raise FileNotFoundError(f"folder not found: {src}")
+        ggufs = list(src.rglob("*.gguf"))
+        if not ggufs:
+            raise FileNotFoundError(f"no .gguf files under {src}")
+        # If folder is already inside models_dir, nothing to link
+        try:
+            src.relative_to(self.models_dir.resolve())
+            return {"imported": [str(p.relative_to(self.models_dir)) for p in ggufs[:50]], "linked": False, "models_dir": str(self.models_dir)}
+        except ValueError:
+            pass
+        link_name = src.name or "imported"
+        dest = (self.models_dir / link_name).resolve()
+        # Avoid collision
+        if dest.exists():
+            if dest.is_symlink() or dest.is_dir():
+                # already linked
+                try:
+                    if dest.resolve() == src:
+                        return {"imported": [str(p.relative_to(self.models_dir)) for p in self.list_local() if link_name in str(p)], "linked": False, "models_dir": str(self.models_dir)}
+                except OSError:
+                    pass
+            # collision with different target — use unique name
+            n = 2
+            while dest.exists():
+                dest = (self.models_dir / f"{link_name}-{n}").resolve()
+                n += 1
+        try:
+            # Windows: directory junction/symlink; fallback to .pth-like shortcut
+            if os.name == "nt":
+                import ctypes
+                # Try symlink first (requires admin/dev mode), fallback to junction via mklink /J
+                try:
+                    dest.symlink_to(src, target_is_directory=True)
+                except OSError:
+                    subprocess.run(["cmd", "/c", "mklink", "/J", str(dest), str(src)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                dest.symlink_to(src, target_is_directory=True)
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"failed to link {src} -> {dest}: {exc}")
+        imported = [str(p.relative_to(self.models_dir)) for p in sorted(dest.rglob("*.gguf"))]
+        return {"imported": imported, "linked": str(dest), "models_dir": str(self.models_dir)}
+
+    def set_models_dir(self, folder: str) -> dict:
+        """Point the library at a new folder (no copy, instant).
+
+        Default is LM Studio's ``.lmstudio/models`` when it exists, else
+        ``models/gguf``. This call switches the live ``models_dir`` and
+        persists it to ``harness_state/models_dir.txt`` so Hugging Face
+        downloads and ``list_local`` use the chosen folder.
+        """
+        p = Path(folder).expanduser().resolve()
+        # Create if it doesn't exist (for fresh download target)
+        if not p.exists():
+            try:
+                p.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                raise FileNotFoundError(f"cannot create folder {p}: {exc}")
+        if not p.is_dir():
+            raise NotADirectoryError(f"not a directory: {p}")
+        # Require read access
+        if not os.access(p, os.R_OK):
+            raise PermissionError(f"cannot read folder: {p}")
+        self.models_dir = p
+        try:
+            cfg = REPO_ROOT / "harness_state" / "models_dir.txt"
+            cfg.parent.mkdir(parents=True, exist_ok=True)
+            cfg.write_text(str(p), encoding="utf-8")
+        except OSError:
+            pass
+        return {"models_dir": str(p), "models": self.list_local()}
 
     def resolve_model(self, name: str) -> Optional[Path]:
         """A model arg is either a local library name/file or a real path."""

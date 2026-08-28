@@ -196,6 +196,10 @@ def main(argv: list[str] | None = None) -> int:
         "--no-open", action="store_true",
         help="do not open the browser once the server is up",
     )
+    parser.add_argument(
+        "--reload", action="store_true",
+        help="auto-reload on Python file changes (dev: CSS in studio.css is live on refresh without this)",
+    )
     args = parser.parse_args(argv)
 
     _protect_git_excludes(Path.cwd(), [
@@ -302,7 +306,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_open:
         threading.Thread(target=_wait_and_open, args=(url,), daemon=True).start()
 
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    uvicorn.run(app, host=args.host, port=args.port, log_level="info", reload=args.reload)
     return 0
 
 
