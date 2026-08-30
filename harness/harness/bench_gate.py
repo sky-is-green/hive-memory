@@ -53,6 +53,58 @@ def extract_pes(report: dict) -> dict:
     }
 
 
+def extract_tok_per_sec(report: dict) -> float:
+    """Extract tok/s from a report, accepting several legacy keys."""
+    perf = report.get("performance") or report.get("metrics") or {}
+    raw = perf.get("tokPerSec") or perf.get("tok_per_sec") or perf.get("throughput")
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    # Fallback: derive from tok/s embedded in post_run_pes detail if present.
+    return 0.0
+
+
+def append_history(history_path: Path, report: dict, run_name: str) -> dict:
+    """Append one protocol run to the bench history file (S18).
+
+    The history is a JSON array of {pes, tokPerSec, runName, timestamp}.
+    Oldest entries are dropped when the file grows past 30 points.
+    """
+    import time
+
+    entry = {
+        "pes": extract_pes(report)["pes"],
+        "tokPerSec": extract_tok_per_sec(report),
+        "runName": run_name,
+        "timestamp": int(time.time() * 1000),
+    }
+    history: list[dict] = []
+    if history_path.is_file():
+        try:
+            loaded = json.loads(history_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, list):
+                history = loaded
+        except Exception:
+            history = []
+    history.append(entry)
+    # Cap at 30 points, oldest dropped.
+    if len(history) > 30:
+        history = history[-30:]
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    history_path.write_text(json.dumps(history, indent=2), encoding="utf-8")
+    return entry
+
+
+def load_history(history_path: Path) -> list[dict]:
+    """Load the bench history array, returning [] when missing or malformed."""
+    if not history_path.is_file():
+        return []
+    try:
+        data = json.loads(history_path.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Bench regression gate (X9)")
     parser.add_argument("--baseline", required=True,

@@ -313,6 +313,8 @@ def launch_extra_args(load_options: dict) -> list[str]:
         args += ["--mlock"]
     if load_options.get("no_mmap"):
         args += ["--no-mmap"]
+    if load_options.get("mmproj"):
+        args += ["--mmproj", str(load_options["mmproj"])]
     return args
 
 
@@ -328,6 +330,7 @@ class ServerInstance:
     started_at: str = ""
     backend: Optional[str] = None
     binary: str = ""
+    embedding: bool = False
     proc: object = field(default=None, repr=False, compare=False)
 
     def to_dict(self) -> dict:
@@ -343,6 +346,7 @@ class ServerInstance:
             "started_at": self.started_at,
             "backend": self.backend,
             "binary": self.binary,
+            "embedding": self.embedding,
         }
 
 
@@ -639,6 +643,9 @@ class LlamaServerManager:
         ngl: int = 999,
         extra_args: Optional[list[str]] = None,
         backend: Optional[str] = None,
+        embedding: bool = False,
+        pooling: Optional[str] = None,
+        mmproj: Optional[str] = None,
     ) -> dict:
         """Load one model as its own llama-server instance. Priority: local
         ``model`` > --hf-repo/--hf-file passthrough. Loading the same model
@@ -647,7 +654,17 @@ class LlamaServerManager:
         ``backend`` selects a per-backend llama-server binary from
         ``tools/backends/<backend>/`` (vulkan | rocm | cuda | cpu | sycl;
         fetched via tools/fetch_backend.ps1). Unset/unknown falls back to the
-        default binary."""
+        default binary. ``embedding`` enables ``--embedding`` mode for
+        embedding models (bge-m3, nomic-embed, etc. — uses ``--pooling``
+        when provided)."""
+        if pooling is not None:
+            pv = pooling.strip().lower()
+            if pv not in ("mean", "cls", "last"):
+                raise RuntimeError(
+                    f"unknown pooling '{pooling}'; known: mean, cls, last")
+            pooling = pv
+        if pooling is not None and not embedding:
+            raise RuntimeError("pooling requires embedding=True")
         binary = self.binary
         backend_name = (backend or "").strip().lower() or None
         if backend_name and backend_name not in BACKENDS:
@@ -709,6 +726,7 @@ class LlamaServerManager:
                     started_at=time.strftime("%Y-%m-%d %H:%M:%S"),
                     backend=backend_name,
                     binary=str(binary),
+                    embedding=embedding,
                 )
                 with self._lock:
                     self._instances[inst.key] = inst
@@ -724,12 +742,22 @@ class LlamaServerManager:
             cmd += ["-m", str(resolved)]
         elif hf_repo and hf_file:
             cmd += ["--hf-repo", hf_repo, "--hf-file", hf_file]
+        if embedding:
+            cmd += ["--embedding"]
+            if pooling:
+                cmd += ["--pooling", pooling]
         cmd += [
             "--host", self.host,
             "--port", str(use_port),
             "-ngl", str(ngl),
             "-c", str(ctx_size),
         ]
+        if embedding:
+            cmd += ["--embedding"]
+            if pooling:
+                cmd += ["--pooling", pooling]
+        if mmproj:
+            cmd += ["--mmproj", mmproj]
         cmd += [str(a) for a in (extra_args or [])]
 
         self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -780,6 +808,7 @@ class LlamaServerManager:
             started_at=time.strftime("%Y-%m-%d %H:%M:%S"),
             backend=backend_name,
             binary=str(binary),
+            embedding=embedding,
             proc=proc,
         )
         with self._lock:
@@ -847,7 +876,6 @@ class LlamaServerManager:
             {"file": e["path"], "size_gb": round(e.get("size", 0) / (1024 ** 3), 2)}
             for e in resp.json()
             if e.get("path", "").endswith(".gguf")
-            and not e["path"].startswith("mmproj")
         ]
 
     def delete_local(self, file: str) -> dict:

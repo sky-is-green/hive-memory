@@ -267,7 +267,7 @@ _SERVER_CSS = _get_server_css()
 
 def tip(text: str) -> str:
     """One inline help glyph whose hover/focus tooltip explains the control it follows."""
-    return f'<span class="hint" tabindex="0" data-tip="{html.escape(text, quote=True)}">?</span>'
+    return ""
 
 
 def render_server_page() -> str:
@@ -278,38 +278,58 @@ def render_server_page() -> str:
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"><meta http-equiv="Pragma" content="no-cache"><meta http-equiv="Expires" content="0"><title>Studio server &amp; models</title>
 <style>{_get_server_css()}</style></head><body>
-<div style="background:#000;color:#FFDD00;padding:.4rem .8rem;margin:-1rem -1.2rem 1rem -1.2rem;text-align:center;font-weight:700;letter-spacing:.04rem">STUDIO v4 — stronger shadow + stable library — {len(_get_server_css())}b CSS</div>
+<div id="top-right-status" title="Launch status: whether a local model is loaded and healthy for the Launch section" style="position:absolute; top:1rem; right:1.2rem; background:#000; color:#FFDD00; border:2px solid #000; padding:.45rem .9rem; border-radius:8px; font-weight:700; font-size:.88rem; z-index:10; max-width:40vw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Launch: No model loaded</div>
 <h1>Hive Studio console</h1>
-<p style="margin:.3rem 0"><button id="afkbtn" onclick="toggleAfk(this)">AFK</button>{tip('AFK mode: human away - QUEEN runs expanded autonomy (GREEN/YELLOW fixes, regen, HIVE-PLAN orders). Public pushes/merges/policy changes queue for return; RED defects contained and logged.')} <a href="/runs"><button>Runs →</button></a> <a href="/docs"><button>API docs</button></a></p>
-<form style="display:inline" onsubmit="event.preventDefault(); return false"><input id="researchq" placeholder="deep-research question..." size="30" autocomplete="off" onkeydown="if (event.key === &quot;Enter&quot;) researchAdd(this)"> <button id="researchsubmit" onclick="researchAdd(this)">Research</button> <span id="researchcount" class="meta"></span>{tip('Queues a deep-research question for QUEEN. Execution is master-only; reports land in RESEARCH/<slug>.md and are summarized on wake.')}</form>
+<p style="margin:.3rem 0"><button id="afkbtn" onclick="toggleAfk(this)" title="AFK mode: human away - QUEEN runs expanded autonomy (GREEN/YELLOW fixes, regen, HIVE-PLAN orders). Public pushes/merges/policy changes queue for return; RED defects contained and logged.">AFK</button> <a href="/runs"><button>Runs →</button></a> <a href="/docs"><button>API docs</button></a></p>
+<form style="display:inline" onsubmit="event.preventDefault(); return false"><input id="researchq" placeholder="deep-research question..." size="30" autocomplete="off" title="Queue a deep-research question for QUEEN; execution is master-only, reports land in RESEARCH/<slug>.md and are summarized on wake." onkeydown="if (event.key === &quot;Enter&quot;) researchAdd(this)"> <button id="researchsubmit" onclick="researchAdd(this)">Research</button> <span id="researchcount" class="meta" title="Queues a deep-research question for QUEEN. Execution is master-only; reports land in RESEARCH/&lt;slug&gt;.md and are summarized on wake."></span></form>
 
 <div class="grid">
 
 <!-- ==================== LEFT: tabs ==================== -->
 <div class="col">
 <div class="tabs">
-<button class="tab active" data-tab="tab-engines">Engines</button>
+<button class="tab active" data-tab="tab-settings">Settings</button>
+<button class="tab" data-tab="tab-agent">Agent</button>
+<button class="tab" data-tab="tab-engines">Engines</button>
 <button class="tab" data-tab="tab-hive">Hive</button>
 <button class="tab" data-tab="tab-providers">Providers</button>
 <button class="tab" data-tab="tab-hub">Hub</button>
 <button class="tab" data-tab="tab-inspect">Inspector</button>
 </div>
 
-<div id="tab-engines" class="tabpane">
+<div id="tab-settings" class="tabpane">
+<section>
+<h2 style="margin-top:0">Settings</h2>
+<div class="row"><label class="inline" title="Studio color scheme: light, dark, or follow system.">Theme  <select id="settings-theme" onchange="setTheme(this.value)"><option value="light">Light</option><option value="dark">Dark</option><option value="system">System</option></select></label></div>
+<div class="row"><span class="note">Engine profiles, model library, and provider settings are in their own tabs. This tab will hold general Studio preferences.</span></div>
+</section>
+</div>
+
+<div id="tab-agent" class="tabpane" style="display:none">
+<section>
+<h2 style="margin-top:0">Agent profiles <span class="note">(presets)</span></h2>
+<div class="row"><button onclick="loadAgentPresets()">Refresh</button><button onclick="createAgentPreset()">New</button></div>
+<div id="agent-presets-list" class="liblist">loading…</div>
+<div id="agent-preset-detail" style="display:none"><h3 id="agent-preset-name"></h3><pre id="agent-preset-content" style="max-height:300px;overflow:auto"></pre><div class="row"><button onclick="saveAgentPreset()">Save</button><button onclick="closeAgentPreset()">Close</button><span id="agent-preset-msg" class="note"></span></div></div>
+<div class="note">Create your own, customise ones you have — like DSH <code>apps/cli/config/agent-presets</code> (<code>preset.yml</code> + <code>agent.cordis.yml</code>). Duplicate any system preset to <code>~/.dsh/.agent-presets/&lt;id&gt;/</code> and edit.</div>
+</section>
+</div>
+
+<div id="tab-engines" class="tabpane" style="display:none">
 <section>
 <h2 style="margin-top:0">Engine profiles — unified</h2>
 <form id="engine-profile-form" class="engine-grid" onsubmit="event.preventDefault(); saveEngineProfile();">
   <div class="row" style="gap:.6rem; flex-wrap:wrap">
     <select id="eng-select" style="min-width:180px" onchange="engineSelected()"></select>
-    <label class="inline">default {tip('Profile applied when a conversation names no engine.')} <input id="eng-default" type="checkbox" onchange="engDirty=true"></label>
+    <label class="inline" title="Profile applied when a conversation names no engine.">default  <input id="eng-default" type="checkbox" onchange="engDirty=true"></label>
     <button type="button" onclick="engineAdd()">+ Add</button>
   </div>
 
   <!-- Model -->
   <div class="engine-group">
-    <h3>Model {tip('Local GGUF model — dropdown populated from the local library')}</h3>
+    <h3 title="Local GGUF model — dropdown populated from the local library">Model </h3>
     <div class="grid-2col">
-      <label>Model {tip('Local GGUF from library — dropdown populated from /v1/models/local')} <select id="eng-model" onchange="engDirty=true; updateFit();"><option value="">— choose local model —</option></select></label>
+      <label title="Local GGUF from library — dropdown populated from /v1/models/local">Model  <select id="eng-model" onchange="engDirty=true; updateFit();"><option value="">— choose local model —</option></select></label>
       <span class="note">Selected: <b id="eng-model-display">—</b> <span id="eng-model-note" class="note" style="margin-left:.5rem"></span></span>
     </div>
   </div>
@@ -318,10 +338,10 @@ def render_server_page() -> str:
   <div class="engine-group">
     <h3>Endpoint</h3>
     <div class="grid-2col">
-      <label>name {tip('Display name of this engine profile.')} <input id="eng-name" size="16" placeholder="local-bonsai" oninput="engDirty=true"></label>
-      <label>displayName {tip('Human name for this profile')} <input id="eng-displayName" placeholder="local-bonsai" oninput="engDirty=true"></label>
-      <label>baseURL {tip('OpenAI-compatible endpoint root, e.g. http://localhost:1234/v1')} <input id="eng-url" placeholder="http://localhost:1234/v1" oninput="engDirty=true"></label>
-      <label>apiKey {tip('Bearer token; leave blank for none')} <input id="eng-apikey" type="password" placeholder="(none)" oninput="engDirty=true"></label>
+      <label title="Display name of this engine profile.">name  <input id="eng-name" size="16" placeholder="local-bonsai" oninput="engDirty=true"></label>
+      <label title="Human name for this profile">displayName  <input id="eng-displayName" placeholder="local-bonsai" oninput="engDirty=true"></label>
+      <label title="OpenAI-compatible endpoint root, e.g. http://localhost:1234/v1">baseURL  <input id="eng-url" placeholder="http://localhost:1234/v1" oninput="engDirty=true"></label>
+      <label title="Bearer token; leave blank for none">apiKey  <input id="eng-apikey" type="password" placeholder="(none)" oninput="engDirty=true"></label>
     </div>
   </div>
 
@@ -329,7 +349,7 @@ def render_server_page() -> str:
   <div class="engine-group">
     <h3>Context</h3>
     <div class="grid-2col">
-      <label>contextLength {tip('Context window tokens')} <input id="eng-ctxlen" type="number" value="8192" min="256" step="256" oninput="engDirty=true; updateFit();"></label>
+      <label title="Context window tokens">contextLength  <input id="eng-ctxlen" type="number" value="8192" min="256" step="256" oninput="engDirty=true; updateFit();"></label>
       <div id="eng-fit" class="fit-panel" style="display:block">
         <div class="fit-grid">
           <span id="fit-needs" class="fit-needs">needs —</span>
@@ -338,7 +358,7 @@ def render_server_page() -> str:
         </div>
         <div class="fit-bar"><div id="fit-fill" class="fit-fill" style="width:0%"></div></div>
         <div class="row fit-controls">
-          <label class="inline">context <input id="fit-ctx" type="range" min="2048" max="131072" step="1024" value="8192"> <span id="fit-ctx-label">8k</span> → <b id="fit-needs-val">—</b> {tip('VRAM estimate: model file + KV cache (≈0.25GB per 1k tokens for 7B q4). 32k → 12GB total for a 4GB model.')}</label>
+          <label class="inline">context <input id="fit-ctx" type="range" min="2048" max="131072" step="1024" value="8192"> <span id="fit-ctx-label" title="VRAM estimate: model file + KV cache (≈0.25GB per 1k tokens for 7B q4). 32k → 12GB total for a 4GB model.">8k</span> → <b id="fit-needs-val">—</b> </label>
           <button type="button" id="eng-load-fit" onclick="engineLoadFromFit()" disabled>Load</button>
         </div>
       </div>
@@ -349,14 +369,14 @@ def render_server_page() -> str:
   <div class="engine-group">
     <h3>Sampling</h3>
     <div class="grid-2col sampling-grid">
-      <label>temp {tip('Randomness: higher = more varied, lower = more focused.')} <input id="s-temp" type="number" step="0.05" min="0" max="2" oninput="engDirty=true"></label>
-      <label>top_p {tip('Nucleus sampling: keep only tokens covering this cumulative probability.')} <input id="s-topp" type="number" step="0.05" min="0" max="1" oninput="engDirty=true"></label>
-      <label>top_k {tip('Sample only from the K most likely tokens.')} <input id="s-topk" type="number" oninput="engDirty=true"></label>
-      <label>min_p {tip('Drop tokens below this fraction of the top token probability.')} <input id="s-minp" type="number" step="0.01" oninput="engDirty=true"></label>
-      <label>repeat_penalty {tip('Penalty on tokens already present; higher = less repetition.')} <input id="s-rep" type="number" step="0.05" oninput="engDirty=true"></label>
-      <label>presence_penalty {tip('Flat penalty once a token appears at all.')} <input id="s-pres" type="number" step="0.1" oninput="engDirty=true"></label>
-      <label>frequency_penalty {tip('Penalty that grows with each repetition of a token.')} <input id="s-freq" type="number" step="0.1" oninput="engDirty=true"></label>
-      <label>seed {tip('Fixed RNG seed for reproducible output; blank = random.')} <input id="s-seed" type="number" oninput="engDirty=true"></label>
+      <label title="Randomness: higher = more varied, lower = more focused.">temp  <input id="s-temp" type="number" step="0.05" min="0" max="2" oninput="engDirty=true"></label>
+      <label title="Nucleus sampling: keep only tokens covering this cumulative probability.">top_p  <input id="s-topp" type="number" step="0.05" min="0" max="1" oninput="engDirty=true"></label>
+      <label title="Sample only from the K most likely tokens.">top_k  <input id="s-topk" type="number" oninput="engDirty=true"></label>
+      <label title="Drop tokens below this fraction of the top token probability.">min_p  <input id="s-minp" type="number" step="0.01" oninput="engDirty=true"></label>
+      <label title="Penalty on tokens already present; higher = less repetition.">repeat_penalty  <input id="s-rep" type="number" step="0.05" oninput="engDirty=true"></label>
+      <label title="Flat penalty once a token appears at all.">presence_penalty  <input id="s-pres" type="number" step="0.1" oninput="engDirty=true"></label>
+      <label title="Penalty that grows with each repetition of a token.">frequency_penalty  <input id="s-freq" type="number" step="0.1" oninput="engDirty=true"></label>
+      <label title="Fixed RNG seed for reproducible output; blank = random.">seed  <input id="s-seed" type="number" oninput="engDirty=true"></label>
     </div>
   </div>
 
@@ -364,14 +384,14 @@ def render_server_page() -> str:
   <div class="engine-group">
     <h3>Load</h3>
     <div class="grid-2col load-grid">
-      <label>threads {tip('CPU threads for inference; blank = automatic.')} <input id="eng-threads" type="number" placeholder="auto" oninput="engDirty=true"></label>
-      <label>gpu_layers {tip('Model layers offloaded to the GPU. 999 = every layer')} <input id="eng-gpu" type="number" value="999" oninput="engDirty=true"></label>
-      <label>flash_attn {tip('FlashAttention kernels: faster attention and lower VRAM at long context.')} <select id="eng-flash" onchange="engDirty=true"><option value="">off</option><option value="on">on</option><option value="auto">auto</option></select></label>
-      <label>parallel {tip('Requests decoded concurrently; each slot shares the context window.')} <input id="eng-parallel" type="number" placeholder="1" oninput="engDirty=true"></label>
-      <label>batch {tip('Logical prompt-processing batch size.')} <input id="eng-batch" type="number" placeholder="512" oninput="engDirty=true"></label>
-      <label>ubatch {tip('Physical micro-batch fed to the model per step.')} <input id="eng-ubatch" type="number" placeholder="512" oninput="engDirty=true"></label>
-      <label>cache K {tip('Quantize the attention key cache to save VRAM')} <select id="eng-ctk" onchange="engDirty=true"><option value="">f16</option><option>q8_0</option><option>q4_0</option></select></label>
-      <label>cache V {tip('Same quantization for the value cache.')} <select id="eng-ctv" onchange="engDirty=true"><option value="">f16</option><option>q8_0</option><option>q4_0</option></select></label>
+      <label title="CPU threads for inference; blank = automatic.">threads  <input id="eng-threads" type="number" placeholder="auto" oninput="engDirty=true"></label>
+      <label title="Model layers offloaded to the GPU. 999 = every layer">gpu_layers  <input id="eng-gpu" type="number" value="999" oninput="engDirty=true"></label>
+      <label title="FlashAttention kernels: faster attention and lower VRAM at long context.">flash_attn  <select id="eng-flash" onchange="engDirty=true"><option value="">off</option><option value="on">on</option><option value="auto">auto</option></select></label>
+      <label title="Requests decoded concurrently; each slot shares the context window.">parallel  <input id="eng-parallel" type="number" placeholder="1" oninput="engDirty=true"></label>
+      <label title="Logical prompt-processing batch size.">batch  <input id="eng-batch" type="number" placeholder="512" oninput="engDirty=true"></label>
+      <label title="Physical micro-batch fed to the model per step.">ubatch  <input id="eng-ubatch" type="number" placeholder="512" oninput="engDirty=true"></label>
+      <label title="Quantize the attention key cache to save VRAM">cache K  <select id="eng-ctk" onchange="engDirty=true"><option value="">f16</option><option>q8_0</option><option>q4_0</option></select></label>
+      <label title="Same quantization for the value cache.">cache V  <select id="eng-ctv" onchange="engDirty=true"><option value="">f16</option><option>q8_0</option><option>q4_0</option></select></label>
     </div>
   </div>
 
@@ -379,12 +399,12 @@ def render_server_page() -> str:
   <div class="engine-group">
     <h3>Advanced</h3>
     <div class="grid-2col advanced-grid">
-      <label>mirostat {tip('Adaptive perplexity control: 0 = off, 1 = v1, 2 = v2.')} <input id="s-miro" type="number" min="0" max="2" oninput="engDirty=true"></label>
-      <label>mirostat_tau {tip('Mirostat target entropy: higher = more surprising text.')} <input id="s-tau" type="number" step="0.1" oninput="engDirty=true"></label>
-      <label>mirostat_eta {tip('How fast mirostat adapts toward its target.')} <input id="s-eta" type="number" step="0.01" oninput="engDirty=true"></label>
-      <label>stop {tip('Comma-separated strings that end generation early.')} <input id="s-stop" placeholder="a,b" oninput="engDirty=true"></label>
-      <label>alias {tip('Model id exposed on /v1/models instead of the file path.')} <input id="eng-alias" placeholder="model id" oninput="engDirty=true"></label>
-      <label>kind {tip('Backend family the harness talks to.')} <select id="eng-kind" onchange="engDirty=true"><option>llama_cpp</option><option>lmstudio</option><option>vllm</option><option>ollama</option><option>hosted</option></select></label>
+      <label title="Adaptive perplexity control: 0 = off, 1 = v1, 2 = v2.">mirostat  <input id="s-miro" type="number" min="0" max="2" oninput="engDirty=true"></label>
+      <label title="Mirostat target entropy: higher = more surprising text.">mirostat_tau  <input id="s-tau" type="number" step="0.1" oninput="engDirty=true"></label>
+      <label title="How fast mirostat adapts toward its target.">mirostat_eta  <input id="s-eta" type="number" step="0.01" oninput="engDirty=true"></label>
+      <label title="Comma-separated strings that end generation early.">stop  <input id="s-stop" placeholder="a,b" oninput="engDirty=true"></label>
+      <label title="Model id exposed on /v1/models instead of the file path.">alias  <input id="eng-alias" placeholder="model id" oninput="engDirty=true"></label>
+      <label title="Backend family the harness talks to.">kind  <select id="eng-kind" onchange="engDirty=true"><option>llama_cpp</option><option>lmstudio</option><option>vllm</option><option>ollama</option><option>hosted</option></select></label>
     </div>
   </div>
 
@@ -392,9 +412,9 @@ def render_server_page() -> str:
   <div class="engine-group" id="ab-compare">
     <h3>A/B compare</h3>
     <div class="grid-2col">
-      <label>A profile {tip('First engine profile to compare')} <select id="ab-select-a"></select></label>
-      <label>B profile {tip('Second engine profile to compare')} <select id="ab-select-b"></select></label>
-      <label>basePort {tip('Base port for A (B runs on basePort+1)')} <input id="ab-baseport" type="number" value="1234" min="1024" max="65534"></label>
+      <label title="First engine profile to compare">A profile  <select id="ab-select-a"></select></label>
+      <label title="Second engine profile to compare">B profile  <select id="ab-select-b"></select></label>
+      <label title="Base port for A (B runs on basePort+1)">basePort  <input id="ab-baseport" type="number" value="1234" min="1024" max="65534"></label>
       <div class="row" style="gap:.5rem; align-items:center">
         <button type="button" id="ab-bench-btn" onclick="benchAb()">Bench</button>
         <span id="ab-winner" class="winner-badge">—</span>
@@ -415,8 +435,8 @@ def render_server_page() -> str:
 
 <section>
 <h2 style="margin-top:0">Local library <span class="note" id="library-path-note"></span></h2>
-<div class="row"><input type="text" id="library-path" placeholder="C:/Users/you/.lmstudio/models" size="38" style="flex:1"><button onclick="setLibraryPath()">Use this folder</button><span id="import-status" class="note" style="margin-left:.5rem"></span></div>
-<div class="row" style="margin-top:.6rem"><input type="text" id="library-filter" placeholder="Filter by name…" size="28" style="flex:1" oninput="filterLibrary()"><span class="note" id="library-filter-count" style="margin-left:.5rem"></span></div>
+<div class="row"><input type="text" id="library-path" placeholder="C:/Users/you/.lmstudio/models" size="38" style="flex:1" title="Local folder holding GGUF files. Change to your LM Studio models folder or HF download dir; persists to harness_state/models_dir.txt."> <button onclick="setLibraryPath()">Use this folder</button><span id="import-status" class="note" style="margin-left:.5rem"></span></div>
+<div class="row" style="margin-top:.6rem"><input type="text" id="library-filter" placeholder="Filter by name…" size="28" style="flex:1" oninput="filterLibrary()" title="Filter the local library list and model dropdowns by filename; shows visible/total count."> <span class="note" id="library-filter-count" style="margin-left:.5rem"></span></div>
 <div id="local" class="liblist">loading…</div>
 </section>
 </div>
@@ -427,32 +447,32 @@ def render_server_page() -> str:
 <div class="note">Applied when a conversation is created — hit
 "New conversation" in the chat pane after changing.</div>
 <div class="row">
-<label class="inline">max_context {tip('Token ceiling for the prompt the hive assembles each turn.')} <input id="h-maxctx" type="number" size="6"></label>
-<label class="inline">max_tokens {tip('Hard cap on generated tokens per reply.')} <input id="h-maxtok" type="number" size="5" placeholder="4096 ceiling"></label>
+<label class="inline" title="Token ceiling for the prompt the hive assembles each turn.">max_context  <input id="h-maxctx" type="number" size="6"></label>
+<label class="inline" title="Hard cap on generated tokens per reply.">max_tokens  <input id="h-maxtok" type="number" size="5" placeholder="4096 ceiling"></label>
 </div>
 <div class="row">
-<label class="inline">stale wall {tip('Turns a fact may sit unreferenced before it ages out of the store.')} <input id="h-stale" type="number" size="3"></label>
-<label class="inline">dedup {tip('Similarity above which new text counts as a duplicate and is not stored again.')} <input id="h-dedup" type="number" step="0.01" size="4"></label>
-<label class="inline">drift {tip('Similarity drop between turns that marks a topic change.')} <input id="h-drift" type="number" step="0.05" size="4"></label>
-<label class="inline">remem {tip('Recall threshold: how similar content must be to resurface from memory.')} <input id="h-remem" type="number" step="0.05" size="4"></label>
+<label class="inline" title="Turns a fact may sit unreferenced before it ages out of the store.">stale wall  <input id="h-stale" type="number" size="3"></label>
+<label class="inline" title="Similarity above which new text counts as a duplicate and is not stored again.">dedup  <input id="h-dedup" type="number" step="0.01" size="4"></label>
+<label class="inline" title="Similarity drop between turns that marks a topic change.">drift  <input id="h-drift" type="number" step="0.05" size="4"></label>
+<label class="inline" title="Recall threshold: how similar content must be to resurface from memory.">remem  <input id="h-remem" type="number" step="0.05" size="4"></label>
 </div>
 <div class="row">
-<label class="inline">vocab boost {tip('Bonus added to relevance scores on exact keyword hits.')} <input id="h-vocab" type="number" step="0.05" size="4"></label>
-<label class="inline">confidence {tip('How the drone estimates its own certainty; mcdropout uses multiple stochastic passes.')} <select id="h-conf">
+<label class="inline" title="Bonus added to relevance scores on exact keyword hits.">vocab boost  <input id="h-vocab" type="number" step="0.05" size="4"></label>
+<label class="inline" title="How the drone estimates its own certainty; mcdropout uses multiple stochastic passes.">confidence  <select id="h-conf">
 <option>off</option><option>single</option><option>mcdropout</option></select></label>
 </div>
 <div class="row">
-<label class="inline"><input id="h-sanitize" type="checkbox"> sanitize context {tip('Security scrub of the assembled context before it reaches the model.')}</label>
-<label class="inline"><input id="h-hedge" type="checkbox"> filter hedge replies {tip('Never store refusal/hedge replies; they pollute the store and resurface as bad context.')}</label>
-<label class="inline"><input id="h-medium" type="checkbox"> medium drone {tip('Second-pass encoder for harder queries: better recall, heavier and VRAM-hungry.')}</label>
+<label class="inline"><input id="h-sanitize" type="checkbox" title="Security scrub of the assembled context before it reaches the model."> sanitize context </label>
+<label class="inline"><input id="h-hedge" type="checkbox" title="Never store refusal/hedge replies; they pollute the store and resurface as bad context."> filter hedge replies </label>
+<label class="inline"><input id="h-medium" type="checkbox" title="Second-pass encoder for harder queries: better recall, heavier and VRAM-hungry."> medium drone </label>
 </div>
 <details><summary>Comb (P11 surplus tier)</summary>
 <div class="row">
-<label class="inline"><input id="h-comb" type="checkbox"> enabled {tip('Freeze evicted chunks to disk so old topics can be resurrected later (P11).')}</label>
-<label class="inline">top_k {tip('Archived candidates allowed to compete for context each turn.')} <input id="h-combk" type="number" size="3"></label>
-<label class="inline">gate {tip('Comb is consulted only when the store scores below this; normal turns pay nothing.')} <input id="h-combgate" type="number" step="0.05" size="4"></label>
-<label class="inline">max records {tip('Cap on archived records kept on disk.')} <input id="h-combmax" type="number" size="5"></label>
-<label class="inline"><input id="h-combrel" type="checkbox"> curated-only {tip('Archive only chunks the hive previously selected as relevant.')}</label>
+<label class="inline"><input id="h-comb" type="checkbox" title="Freeze evicted chunks to disk so old topics can be resurrected later (P11)."> enabled </label>
+<label class="inline" title="Archived candidates allowed to compete for context each turn.">top_k  <input id="h-combk" type="number" size="3"></label>
+<label class="inline" title="Comb is consulted only when the store scores below this; normal turns pay nothing.">gate  <input id="h-combgate" type="number" step="0.05" size="4"></label>
+<label class="inline" title="Cap on archived records kept on disk.">max records  <input id="h-combmax" type="number" size="5"></label>
+<label class="inline"><input id="h-combrel" type="checkbox" title="Archive only chunks the hive previously selected as relevant."> curated-only </label>
 </div>
 </details>
 <div class="row"><span id="hive-msg" class="note"></span>
@@ -481,13 +501,13 @@ providers.local.json (gitignored).</div>
 <div id="tab-hub" class="tabpane" style="display:none">
 <section>
 <h2 style="margin-top:0">Hugging Face hub <span class="note">(live)</span></h2>
-<div class="row"><span class="sugwrap" style="width:100%"><input id="q" placeholder="search gguf repos…" style="width:100%">
+<div class="row"><span class="sugwrap" style="width:100%"><input id="q" placeholder="search gguf repos…" style="width:100%" title="Live search Hugging Face Hub for GGUF repos; typeahead after 2 chars, 8 results with download counts.">
 <div class="sugbox" id="sug-q"></div></span></div>
 <datalist id="repo-suggestions"></datalist>
 <pre id="hub">(search above)</pre>
-<div class="row"><span class="sugwrap" style="width:100%"><input id="drepo" placeholder="repo id (type for suggestions)" style="width:100%">
+<div class="row"><span class="sugwrap" style="width:100%"><input id="drepo" placeholder="repo id (type for suggestions)" style="width:100%" title="Target Hugging Face repo id; type for suggestions from live search.">
 <div class="sugbox" id="sug-drepo"></div></span><br>
-<input id="dfile" placeholder="file.gguf" size="24">{tip('Exact GGUF filename inside that repo (copy it from the search results).')}
+<input id="dfile" placeholder="file.gguf" size="24" title="Exact GGUF filename inside that repo (copy it from the search results).">
 <button onclick="download(this)">Download</button></div>
 <pre id="downloads"></pre>
 </section>
@@ -520,21 +540,21 @@ providers.local.json (gitignored).</div>
 <div class="chat-controls">
 <span class="modesel">
 <label class="inline">model <select id="chat-provider" onchange="saveConvProvider(this.value)" title="Inference target for this conversation"></select></label>
-<label class="inline"><input type="radio" name="chatmode" value="hive" checked> Hive {tip('Curated generation: the hive assembles the context, then generates directly.')}</label>
-<label class="inline"><input type="radio" name="chatmode" value="agent"> Agent (dsh) {tip('The full DeepSeek Harness agent loop — tools, multi-step turns, session log — pointed at the loaded model.')}</label>
+<label class="inline"><input type="radio" name="chatmode" value="hive" checked title="Curated generation: the hive assembles the context, then generates directly."> Hive </label>
+<label class="inline"><input type="radio" name="chatmode" value="agent" title="The full DeepSeek Harness agent loop — tools, multi-step turns, session log — pointed at the loaded model."> Agent (dsh) </label>
 </span>
-<button onclick="newConversation()">New conversation</button>{tip('Opens a fresh session tab; the current one stays in the tab strip.')}
+<button onclick="newConversation()" title="Opens a fresh session tab; the current one stays in the tab strip.">New conversation</button>
 </div>
 </div>
 <div id="chatlog" class="chatlog"></div>
 <div class="composer">
-<span class="sugwrap composer-input"><input id="chatin" placeholder="Talk to the loaded AI…  (/ for commands)"
+<span class="sugwrap composer-input"><input id="chatin" placeholder="Talk to the loaded AI…  (/ for commands)" title="Send a message to the loaded model. Hive mode curates context automatically; Agent mode runs the full DSH tool loop. Use / for slash commands."
        onkeydown="if (event.key === 'Enter') chatSubmit()" autocomplete="off">
 <div class="sugbox" id="sug-chat"></div></span>
 <button id="sendbtn" onclick="chatSubmit()">Send</button>
 <button id="stopbtn" onclick="cancelStream()">Stop</button>
-<button id="savebtn" onclick="saveSession()">Save session</button>{tip('Name and keep this session as a tab. Tabs and transcripts survive page reloads.')}
-<button onclick="newConversation()">+ New session</button>{tip('Opens a fresh session tab right away; the current one stays in the tab strip.')}
+<button id="savebtn" onclick="saveSession()" title="Name and keep this session as a tab. Tabs and transcripts survive page reloads.">Save session</button>
+<button onclick="newConversation()" title="Opens a fresh session tab right away; the current one stays in the tab strip.">+ New session</button>
 </div>
 <div class="note"><b>Hive</b>: direct curated generation. <b>Agent (dsh)</b>:
 the full DeepSeek Harness agent loop — bash/files/code tools, multi-step
@@ -550,33 +570,38 @@ turns, durable session log.</div>
 <button onclick="api('/v1/server/stop', 'POST').then(() => refresh())">Stop</button></div>
 <div class="row">
 <label class="inline" style="flex:1">Model <select id="launch-model-select" style="flex:1;min-width:220px"><option value="">— choose local model —</option></select></label>
-<span class="sugwrap"><input id="model" placeholder="or type path" size="18" list="local-suggestions">
-<datalist id="local-suggestions"></datalist></span>{tip('Pick from Local library dropdown or type a GGUF path; blank uses Hugging Face repo/file below.')}
-<label class="inline">ctx {tip('Context window in tokens llama-server serves; caps prompt + reply together.')} <input id="ctx" type="number" value="8192" size="4"></label>
-<label class="inline">gpu {tip('Model layers offloaded to the GPU. 999 = every layer (needs enough VRAM); lower it if you run out.')} <input id="ngl" type="number" value="999" size="3"></label>
-<label class="inline">api-key {tip('Bearer token llama-server expects on requests; leave blank when none is set.')} <input id="l-apikey" size="10" placeholder="(none)"></label><br>
+<span class="sugwrap"><input id="model" placeholder="or type path" size="18" list="local-suggestions" title="Pick from Local library dropdown or type a GGUF path; blank uses Hugging Face repo/file below.">
+<datalist id="local-suggestions"></datalist></span>
+<label class="inline" title="Context window in tokens llama-server serves; caps prompt + reply together.">ctx  <input id="ctx" type="number" value="8192" size="4"></label>
+<label class="inline" title="Model layers offloaded to the GPU. 999 = every layer (needs enough VRAM); lower it if you run out.">gpu  <input id="ngl" type="number" value="999" size="3"></label>
+<label class="inline" title="Bearer token llama-server expects on requests; leave blank when none is set.">api-key  <input id="l-apikey" size="10" placeholder="(none)"></label><br>
 <span class="sugwrap"><input id="hfrepo" placeholder="--hf-repo (type to search)" size="30">
 <div class="sugbox" id="sug-hfrepo"></div></span>
-<input id="hffile" placeholder="--hf-file" size="18">{tip('Hugging Face source: repo id plus the exact GGUF filename inside it.')}
+<input id="hffile" placeholder="--hf-file" size="18" title="Hugging Face source: repo id plus the exact GGUF filename inside it.">
 <button onclick="startServer(this)">Start</button></div>
 <details><summary>Advanced launch flags</summary>
 <div class="row">
-<label class="inline">threads {tip('CPU threads for inference; blank = automatic.')} <input id="l-threads" type="number" size="3" placeholder="auto"></label>
-<label class="inline"><input id="l-fa" type="checkbox"> flash-attn {tip('FlashAttention kernels: faster attention and lower VRAM at long context.')}</label>
-<label class="inline">parallel {tip('Requests decoded concurrently; each slot shares the context window.')} <input id="l-parallel" type="number" size="2" placeholder="1"></label>
-<label class="inline"><input id="l-mlock" type="checkbox"> mlock {tip('Lock model weights in RAM so they never page to disk; slower startup.')}</label>
-<label class="inline"><input id="l-nommap" type="checkbox"> no-mmap {tip('Read weights fully into memory instead of memory-mapping the file.')}</label>
+<label class="inline" title="CPU threads for inference; blank = automatic.">threads  <input id="l-threads" type="number" size="3" placeholder="auto"></label>
+<label class="inline"><input id="l-fa" type="checkbox" title="FlashAttention kernels: faster attention and lower VRAM at long context."> flash-attn </label>
+<label class="inline" title="Requests decoded concurrently; each slot shares the context window.">parallel  <input id="l-parallel" type="number" size="2" placeholder="1"></label>
+<label class="inline"><input id="l-mlock" type="checkbox" title="Lock model weights in RAM so they never page to disk; slower startup."> mlock </label>
+<label class="inline"><input id="l-nommap" type="checkbox" title="Read weights fully into memory instead of memory-mapping the file."> no-mmap </label>
 </div>
 <div class="row">
-<label class="inline">kv-K {tip('Quantize the attention key cache to save VRAM (small quality cost).')} <select id="l-ctk"><option value="">f16</option><option>q8_0</option><option>q4_0</option></select></label>
-<label class="inline">kv-V {tip('Same quantization for the value cache.')} <select id="l-ctv"><option value="">f16</option><option>q8_0</option><option>q4_0</option></select></label>
-<label class="inline">batch {tip('Logical prompt-processing batch size.')} <input id="l-batch" type="number" size="4" placeholder="512"></label>
-<label class="inline">ubatch {tip('Physical micro-batch fed to the model per step.')} <input id="l-ubatch" type="number" size="4" placeholder="512"></label>
-<label class="inline">alias {tip('Model id exposed on /v1/models instead of the file path.')} <input id="l-alias" size="14" placeholder="model id"></label>
+<label class="inline" title="Quantize the attention key cache to save VRAM (small quality cost).">kv-K  <select id="l-ctk"><option value="">f16</option><option>q8_0</option><option>q4_0</option></select></label>
+<label class="inline" title="Same quantization for the value cache.">kv-V  <select id="l-ctv"><option value="">f16</option><option>q8_0</option><option>q4_0</option></select></label>
+<label class="inline" title="Logical prompt-processing batch size.">batch  <input id="l-batch" type="number" size="4" placeholder="512"></label>
+<label class="inline" title="Physical micro-batch fed to the model per step.">ubatch  <input id="l-ubatch" type="number" size="4" placeholder="512"></label>
+<label class="inline" title="Model id exposed on /v1/models instead of the file path.">alias  <input id="l-alias" size="14" placeholder="model id"></label>
 </div>
 </details>
 <pre id="status">loading…</pre>
 <div id="instances"></div>
+<section id="proc-manager" style="margin-top:1rem">
+<h3 style="margin:.6rem 0 .3rem">Process manager <span class="note">CPU/RAM · kill</span></h3>
+<div class="row" style="gap:.5rem;align-items:center"><button onclick="refreshProcesses()">Refresh processes</button><span id="proc-msg" class="note"></span><span id="proc-sidecar" class="note" style="margin-left:.4rem"></span></div>
+<table style="width:100%;margin-top:.4rem"><thead><tr><th>PID</th><th>Kind</th><th>Name</th><th title="CPU % (process)">CPU%</th><th title="Resident memory MB">RAM MB</th><th>Port</th><th>Status</th><th></th></tr></thead><tbody id="proc-table"><tr><td colspan="8" class="note">loading…</td></tr></tbody></table>
+</section>
 <pre id="srvlog" title="llama_server.log tail">log: loading…</pre>
 </section>
 
@@ -619,6 +644,7 @@ for (const btn of document.querySelectorAll('.tab')) {{
     for (const p of document.querySelectorAll('.tabpane')) p.style.display = 'none';
     btn.classList.add('active');
     document.getElementById(btn.dataset.tab).style.display = '';
+    if (btn.dataset.tab === 'tab-agent') loadAgentPresets();
     if (btn.dataset.tab === 'tab-engines') loadEngines();
     if (btn.dataset.tab === 'tab-hive') loadHiveDefaults();
     if (btn.dataset.tab === 'tab-providers') loadProviders();
@@ -1245,7 +1271,6 @@ function filterLibrary() {{
   }}
   const count = document.getElementById('library-filter-count');
   if (count) count.textContent = q ? `${{visible}} / ${{wrap.children.length}}` : '';
-  // Also filter the Engine and Launch dropdowns
   const engSel = document.getElementById('eng-model-select');
   const launchSel = document.getElementById('launch-model-select');
   const filterSelect = (sel) => {{
@@ -1258,6 +1283,79 @@ function filterLibrary() {{
   }};
   filterSelect(engSel);
   filterSelect(launchSelect);
+}}
+
+let _currentAgentPreset = null;
+async function loadAgentPresets() {{
+  const wrap = document.getElementById('agent-presets-list');
+  const detail = document.getElementById('agent-preset-detail');
+  if (wrap) wrap.textContent = 'loading…';
+  try {{
+    // Try DSH apiproxy first, fallback to local file list
+    let presets = [];
+    try {{ const r = await api('/v1/agent-presets/list'); presets = r.presets || r; }} catch(e) {{
+      // Fallback: list from /v1/provider/config + shipped presets
+      const r = await api('/v1/provider/config'); presets = (r.providers||[]).map(p=>({{id:p.name, name:p.displayName||p.name, trust:'user'}}));
+    }}
+    if (!wrap) return;
+    wrap.innerHTML = '';
+    if (!presets.length) {{ wrap.textContent = '(no presets)'; return; }}
+    for (const p of presets) {{
+      const row = document.createElement('div');
+      row.className = 'librow';
+      const label = document.createElement('span');
+      label.textContent = `${{p.name||p.id}} — ${{p.trust||'system'}}${{p.broken?' — broken':''}}`;
+      const open = document.createElement('button');
+      open.textContent = p.trust==='user' ? 'Edit' : 'View';
+      open.onclick = async () => {{
+        _currentAgentPreset = p.id;
+        document.getElementById('agent-preset-name').textContent = p.name||p.id;
+        const contentEl = document.getElementById('agent-preset-content');
+        try {{
+          const r = await api('/v1/agent-presets/read', 'POST', {{agentPreset:p.id}});
+          contentEl.textContent = r.content || JSON.stringify(r,null,2);
+        }} catch(e) {{ contentEl.textContent = 'cannot read: '+e.message; }}
+        detail.style.display='';
+      }};
+      const dup = document.createElement('button');
+      dup.textContent = 'Duplicate';
+      dup.onclick = async () => {{
+        const nid = prompt('New preset id (a-z0-9-):', p.id+'-copy');
+        if (!nid) return;
+        try {{ await api('/v1/agent-presets/copy', 'POST', {{from:p.id, agentPreset:nid}}); loadAgentPresets(); }} catch(e){{ alert(String(e)); }}
+      }};
+      row.appendChild(label);
+      row.appendChild(open);
+      row.appendChild(dup);
+      if (p.trust==='user') {{
+        const del = document.createElement('button'); del.textContent='Delete'; del.onclick=async()=>{{ if(!confirm('Delete '+p.id+'?'))return; try{{ await api('/v1/agent-presets/remove','POST',{{agentPreset:p.id}}); loadAgentPresets();}}catch(e){{alert(String(e));}} }}; row.appendChild(del);
+      }}
+      if (p.description) row.title = p.description;
+      wrap.appendChild(row);
+    }}
+  }} catch(e) {{ if(wrap) wrap.textContent='load failed: '+e.message; }}
+}}
+async function createAgentPreset() {{
+  const id = prompt('New preset id (a-z0-9-):', 'my-preset');
+  if (!id) return;
+  const from = prompt('Copy from preset id (blank for empty):', 'standard') || 'standard';
+  try {{ await api('/v1/agent-presets/copy','POST',{{from, agentPreset:id}}); loadAgentPresets(); }} catch(e){{ alert(String(e)); }}
+}}
+async function saveAgentPreset() {{
+  const contentEl = document.getElementById('agent-preset-content');
+  const msg = document.getElementById('agent-preset-msg');
+  if (!_currentAgentPreset || !contentEl) return;
+  msg.textContent='saving…';
+  try {{
+    // For now, just show that editing is via files; direct save not yet wired in Studio
+    msg.textContent='editing via files: save agent.cordis.yml in ~/.dsh/.agent-presets/'+_currentAgentPreset+'/';
+    // Future: POST to /v1/agent-presets/write
+  }} catch(e){{ msg.textContent='save failed: '+e.message; }}
+  setTimeout(()=>{{msg.textContent='';}},3000);
+}}
+function closeAgentPreset() {{
+  document.getElementById('agent-preset-detail').style.display='none';
+  _currentAgentPreset=null;
 }}
 
 /* --------------------------- engines tab ----------------------------- */
@@ -1939,16 +2037,17 @@ function renderProviders() {{
     row.className = 'row';
     row.style.borderTop = '1px solid #e8edf2';
     row.style.paddingTop = '.4rem';
-    const mk = (placeholder, value, size, onChange) => {{
+    const mk = (placeholder, value, size, onChange, title) => {{
       const inp = document.createElement('input');
       inp.placeholder = placeholder; inp.size = size; inp.value = value || '';
+      if (title) inp.title = title;
       inp.addEventListener('input', onChange);
       return inp;
     }};
-    const name = mk('name', p.name, 12, v => p.name = v);
-    const url = mk('base_url', p.base_url, 34, v => p.base_url = v);
-    const model = mk('model', p.model, 18, v => p.model = v);
-    const key = mk('api_key', p.api_key, 16, v => p.api_key = v);
+    const name = mk('name', p.name, 12, v => p.name = v, 'Provider id, e.g. anthropic or openai; key for model routing');
+    const url = mk('base_url', p.base_url, 34, v => p.base_url = v, 'OpenAI-compatible endpoint root, e.g. https://api.anthropic.com/v1');
+    const model = mk('model', p.model, 18, v => p.model = v, 'Default model id for this provider, e.g. claude-3-5-sonnet-20241022');
+    const key = mk('api_key', p.api_key, 16, v => p.api_key = v, 'API key for this provider; stored masked as *** and sent as Bearer token');
     const def = document.createElement('input');
     def.type = 'radio'; def.name = 'prov-default'; def.checked =
       p.name.toLowerCase() === provDefault.toLowerCase();
@@ -2063,6 +2162,16 @@ async function refresh() {{
     }} else {{
       title.textContent = s.running ? 'Loading…' : 'No model loaded';
       title.className = 'bad';
+    }}
+    const topStatus = document.getElementById('top-right-status');
+    if (topStatus) {{
+      if (s.running && s.healthy) {{
+        topStatus.textContent = s.instances.length > 1
+          ? `Launch: ${{s.instances.length}} models loaded`
+          : 'Launch: Loaded ' + (s.model || 'model');
+      }} else {{
+        topStatus.textContent = s.running ? 'Launch: Loading…' : 'Launch: No model loaded';
+      }}
     }}
     // Loaded-instance cards: per-model unload, port shown.
     const wrap = document.getElementById('instances');
@@ -2192,47 +2301,23 @@ async function refresh() {{
           refresh();
         }} catch (e) {{ alert(String(e)); }}
       }});
-      // HoverCard: delayed hover preview with gguf-metadata + sizeGb + lastModified inline
-      let hoverTimer = null;
-      let hoverCard = null;
-      const showHover = () => {{
-        if (hoverCard) return;
-        const arch = m.architecture || m.gguf_metadata?.['general.architecture'] || m.ggufMetadata?.['general.architecture'] || '—';
-        const quant = m.quantization || m.gguf_metadata?.quantization || m.ggufMetadata?.quantization || '—';
-        const ctx = m.context_length ?? m.contextLength ?? m.gguf_metadata?.context_length ?? m.ggufMetadata?.context_length ?? (() => {{
-          const gm = m.gguf_metadata || m.ggufMetadata || {{}};
-          for (const k in gm) {{ if (k.endsWith('.context_length')) return gm[k]; }}
-          return '—';
-        }})();
-        const size = m.size_gb != null ? `${{m.size_gb}} GB` : (m.sizeGb != null ? `${{m.sizeGb}} GB` : '—');
-        const mod = m.modified || m.lastModified || '—';
-        hoverCard = document.createElement('div');
-        hoverCard.className = 'hovercard';
-        hoverCard.setAttribute('role', 'tooltip');
-        hoverCard.textContent = `${{arch}} · ${{quant}} · ${{ctx}} · ${{size}} · ${{mod}}`;
-        document.body.appendChild(hoverCard);
-        const rect = row.getBoundingClientRect();
-        const cardRect = hoverCard.getBoundingClientRect();
-        let left = rect.right + 8;
-        let top = rect.top;
-        if (top + cardRect.height > window.innerHeight - 8) top = window.innerHeight - cardRect.height - 8;
-        if (left + cardRect.width > window.innerWidth - 8) left = rect.left - cardRect.width - 8;
-        if (left < 8) left = 8;
-        if (top < 8) top = 8;
-        hoverCard.style.left = left + 'px';
-        hoverCard.style.top = top + 'px';
-      }};
-      const hideHover = () => {{
-        if (hoverTimer) {{ clearTimeout(hoverTimer); hoverTimer = null; }}
-        if (hoverCard) {{ hoverCard.remove(); hoverCard = null; }}
-      }};
+      // Native tooltip with gguf-metadata + sizeGb + lastModified
+      const arch = m.architecture || m.gguf_metadata?.['general.architecture'] || m.ggufMetadata?.['general.architecture'] || '—';
+      const quant = m.quantization || m.gguf_metadata?.quantization || m.ggufMetadata?.quantization || '—';
+      const ctx = m.context_length ?? m.contextLength ?? m.gguf_metadata?.context_length ?? m.ggufMetadata?.context_length ?? (() => {{
+        const gm = m.gguf_metadata || m.ggufMetadata || {{}};
+        for (const k in gm) {{ if (k.endsWith('.context_length')) return gm[k]; }}
+        return '—';
+      }})();
+      const size = m.size_gb != null ? `${{m.size_gb}} GB` : (m.sizeGb != null ? `${{m.sizeGb}} GB` : '—');
+      const mod = m.modified || m.lastModified || '—';
+      row.title = `${{arch}} · ${{quant}} · ${{ctx}} · ${{size}} · ${{mod}}`;
       // Click row = select model (also long-press visual)
       let pressTimer = null;
       const setPressed = (on) => row.classList.toggle('pressed', on);
       row.addEventListener('mousedown', () => {{ pressTimer = setTimeout(()=>setPressed(true), 400); }});
       row.addEventListener('mouseup', () => {{ clearTimeout(pressTimer); setPressed(false); }});
-      row.addEventListener('mouseleave', () => {{ clearTimeout(pressTimer); setPressed(false); hideHover(); }});
-      row.addEventListener('mouseenter', () => {{ hoverTimer = setTimeout(showHover, 1000); }});
+      row.addEventListener('mouseleave', () => {{ clearTimeout(pressTimer); setPressed(false); }});
       row.addEventListener('touchstart', () => {{ pressTimer = setTimeout(()=>setPressed(true), 400); }}, {{passive:true}});
       row.addEventListener('touchend', () => {{ clearTimeout(pressTimer); setPressed(false); }});
       row.addEventListener('click', (e) => {{
@@ -2265,6 +2350,58 @@ async function refresh() {{
   }}).catch(() => {{}});
 }}
 
+/* --------------------- process manager (S4) --------------------- */
+async function refreshProcesses() {{
+  const msg = document.getElementById('proc-msg');
+  const tbody = document.getElementById('proc-table');
+  const sidecarEl = document.getElementById('proc-sidecar');
+  try {{
+    const data = await api('/v1/processes');
+    tbody.innerHTML = '';
+    if (sidecarEl) sidecarEl.textContent = `sidecar ${{data.sidecar.pid}} · ${{data.sidecar.memory_mb}} MB · ${{data.sidecar.cpu_percent}}% CPU`;
+    for (const p of data.processes || []) {{
+      const tr = document.createElement('tr');
+      const td = (t) => {{ const c=document.createElement('td'); c.textContent=t; return c; }};
+      tr.appendChild(td(String(p.pid)));
+      tr.appendChild(td(p.kind || ''));
+      const nameTd = document.createElement('td');
+      nameTd.title = (p.cmdline || []).join(' ');
+      nameTd.textContent = (p.name || '') + (p.key ? ' ('+p.key+')' : '');
+      tr.appendChild(nameTd);
+      tr.appendChild(td(String(p.cpu_percent ?? '')));
+      tr.appendChild(td(String(p.memory_mb ?? '')));
+      tr.appendChild(td(p.port ? String(p.port) : ''));
+      tr.appendChild(td(p.status || ''));
+      const killTd = document.createElement('td');
+      const btn = document.createElement('button');
+      btn.textContent = 'kill';
+      btn.title = p.key ? 'unload '+p.key : 'terminate pid '+p.pid;
+      btn.addEventListener('click', async () => {{
+        if (!confirm('Kill ' + (p.key || p.pid) + '?')) return;
+        btn.disabled = true;
+        try {{
+          const body = p.key ? {{key: p.key}} : {{pid: p.pid}};
+          await api('/v1/processes/kill','POST', body);
+          if (msg) msg.textContent = 'killed ' + (p.key || p.pid);
+          refreshProcesses(); refresh();
+        }} catch(e) {{ alert(String(e)); btn.disabled=false; }}
+      }});
+      killTd.appendChild(btn);
+      tr.appendChild(killTd);
+      tbody.appendChild(tr);
+    }}
+    if (!(data.processes||[]).length) {{
+      const tr=document.createElement('tr'); const td=document.createElement('td');
+      td.colSpan=8; td.className='note'; td.textContent='(no managed processes)'; tr.appendChild(td); tbody.appendChild(tr);
+    }}
+    if (msg) {{ msg.textContent=''; setTimeout(()=>{{ if(msg) msg.textContent=''; }},2000); }}
+  }} catch(e) {{
+    if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="note">load failed: '+String(e).slice(0,200)+'</td></tr>';
+    if (msg) msg.textContent = String(e).slice(0,120);
+  }}
+}}
+refreshProcesses();
+setInterval(refreshProcesses, 8000);
 refresh();
 setInterval(refresh, 15000);
 loadHiveDefaults();

@@ -616,6 +616,9 @@ class ServerStartRequest(BaseModel):
     no_mmap: bool = False
     api_key: Optional[str] = None  # protect llama-server (--api-key)
     backend: Optional[str] = None  # vulkan | rocm | cuda | cpu | sycl (binary under tools/backends/<backend>/)
+    embedding: bool = False  # when True, launch with --embedding (bge-m3, nomic-embed, etc.)
+    pooling: Optional[str] = None  # mean | cls | last (requires embedding)
+    mmproj: Optional[str] = None  # path to mmproj file for multimodal/vision models
 
     def extra_args(self) -> list[str]:
         args: list[str] = []
@@ -643,6 +646,8 @@ class ServerStartRequest(BaseModel):
             args += ["--no-mmap"]
         if self.api_key:
             args += ["--api-key", self.api_key]
+        if self.mmproj:
+            args += ["--mmproj", self.mmproj]
         return args
 
     def load_options(self) -> dict:
@@ -657,7 +662,10 @@ class ServerStartRequest(BaseModel):
                            ("ubatch_size", self.ubatch_size),
                            ("alias", self.alias),
                            ("mlock", self.mlock or None),
-                           ("no_mmap", self.no_mmap or None)):
+                           ("no_mmap", self.no_mmap or None),
+                           ("embedding", self.embedding or None),
+                           ("pooling", self.pooling),
+                           ("mmproj", self.mmproj)):
             if value is not None:
                 out[key] = value
         return out
@@ -1899,6 +1907,225 @@ def create_app(
     def server_metrics():
         return models_manager.server_metrics()
 
+    @app.get("/v1/processes")
+    def list_processes():
+        """Process manager: spawned servers (llama-servers) + child shells.
+
+        Each entry carries pid, name, cmdline, cpu_percent, memory_mb, and a
+        kill affordance. The table powers the S4 Studio panel (CPU/RAM + kill
+        buttons)."""
+        import psutil
+
+        processes: list[dict] = []
+        # snapshot of managed llama-servers
+        try:
+            status = models_manager.status()
+            instances = status.get("instances", []) or []
+        except Exception:
+            instances = []
+        pid_to_inst = {int(inst.get("pid")): inst for inst in instances if inst.get("pid")}
+        # helper to build one row
+        def row_for_pid(pid: int, kind: str, inst: Optional[dict] = None) -> Optional[dict]:
+            try:
+                proc = psutil.Process(pid)
+                with proc.oneshot():
+                    name = proc.name() or ""
+                    try:
+                        cmdline = proc.cmdline() or []
+                    except psutil.AccessDenied:
+                        cmdline = []
+                    try:
+                        cpu = float(proc.cpu_percent(interval=None))
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        cpu = 0.0
+                    try:
+                        rss = proc.memory_info().rss
+                        mem_mb = round(rss / (1024 * 1024), 1)
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        mem_mb = 0.0
+                    try:
+                        p_status = proc.status()
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        p_status = "unknown"
+                return {
+                    "pid": pid,
+                    "key": inst.get("key") if inst else None,
+                    "kind": kind,
+                    "name": name,
+                    "cmdline": cmdline,
+                    "cpu_percent": round(cpu, 1),
+                    "memory_mb": mem_mb,
+                    "status": p_status,
+                    "port": inst.get("port") if inst else None,
+                    "embedding": bool(inst.get("embedding")) if inst else False,
+                    "adopted": bool(inst.get("adopted")) if inst else False,
+                }
+            except psutil.NoSuchProcess:
+                if inst is not None:
+                    return {
+                        "pid": pid,
+                        "key": inst.get("key"),
+                        "kind": kind,
+                        "name": "llama-server",
+                        "cmdline": [],
+                        "cpu_percent": 0.0,
+                        "memory_mb": 0.0,
+                        "status": "not-found",
+                        "port": inst.get("port"),
+                        "embedding": bool(inst.get("embedding")),
+                        "adopted": bool(inst.get("adopted")),
+                    }
+                return None
+            except psutil.AccessDenied:
+                return {
+                    "pid": pid,
+                    "key": inst.get("key") if inst else None,
+                    "kind": kind,
+                    "name": "unknown",
+                    "cmdline": [],
+                    "cpu_percent": 0.0,
+                    "memory_mb": 0.0,
+                    "status": "access-denied",
+                    "port": inst.get("port") if inst else None,
+                    "embedding": bool(inst.get("embedding")) if inst else False,
+                    "adopted": bool(inst.get("adopted")) if inst else False,
+                }
+
+        # llama-server rows first (so UI shows servers at top)
+        for inst in instances:
+            pid = inst.get("pid")
+            if pid is None:
+                continue
+            try:
+                pid_int = int(pid)
+            except (TypeError, ValueError):
+                continue
+            row = row_for_pid(pid_int, "llama-server", inst)
+            if row:
+                processes.append(row)
+        # child processes of the sidecar (shells, etc.) not already listed
+        try:
+            me = psutil.Process()
+            children = me.children(recursive=True)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            children = []
+        seen_pids = {p["pid"] for p in processes}
+        for child in children:
+            try:
+                cpid = int(child.pid)
+            except (TypeError, ValueError):
+                continue
+            if cpid in seen_pids or cpid in pid_to_inst:
+                continue
+            row = row_for_pid(cpid, "shell", None)
+            if row:
+                processes.append(row)
+        # sidecar itself
+        try:
+            me = psutil.Process()
+            with me.oneshot():
+                sidecar_cpu = float(me.cpu_percent(interval=None))
+                sidecar_mem = round(me.memory_info().rss / (1024 * 1024), 1)
+                sidecar_status = me.status()
+                sidecar_name = me.name() or "sidecar"
+                sidecar_pid = int(me.pid)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            sidecar_cpu = 0.0
+            sidecar_mem = 0.0
+            sidecar_status = "unknown"
+            sidecar_name = "sidecar"
+            try:
+                sidecar_pid = int(psutil.Process().pid)
+            except Exception:
+                sidecar_pid = 0
+        return {
+            "processes": sorted(processes, key=lambda p: (0 if p["kind"] == "llama-server" else 1, p["pid"])),
+            "sidecar": {
+                "pid": sidecar_pid,
+                "name": sidecar_name,
+                "cpu_percent": round(sidecar_cpu, 1),
+                "memory_mb": sidecar_mem,
+                "status": sidecar_status,
+            },
+        }
+
+    @app.post("/v1/processes/kill")
+    async def kill_process(request: Request):
+        """Kill one process by pid or by managed key (S4 kill button).
+
+        Body: {"pid": 1234} or {"key": "bge"} or both (key preferred when
+        it matches a managed instance so unload() is used and provider
+        cleanup runs)."""
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(422, "invalid JSON")
+        pid_raw = body.get("pid")
+        key = str(body.get("key") or "").strip() if body.get("key") else None
+        # key path: managed llama-server
+        if key:
+            try:
+                result = models_manager.unload(key)
+                return {"ok": True, "killed": result.get("unloaded", key), "by": "key"}
+            except RuntimeError as exc:
+                # key not a managed instance — fall through to pid kill if pid given
+                if pid_raw is None:
+                    raise HTTPException(404, str(exc))
+        if pid_raw is None:
+            raise HTTPException(422, "pid or key is required")
+        try:
+            pid = int(pid_raw)
+        except (TypeError, ValueError):
+            raise HTTPException(422, "pid must be an integer")
+        if pid <= 0:
+            raise HTTPException(422, "invalid pid")
+        # try to map pid to a managed instance first (so unload path is used)
+        try:
+            status = models_manager.status()
+            for inst in status.get("instances", []) or []:
+                if int(inst.get("pid") or -1) == pid:
+                    k = inst.get("key")
+                    try:
+                        models_manager.unload(k)
+                        return {"ok": True, "killed": pid, "by": "key", "key": k}
+                    except RuntimeError:
+                        break
+        except Exception:
+            pass
+        # generic pid kill via psutil
+        import psutil
+
+        try:
+            proc = psutil.Process(pid)
+            # guard: do not kill the sidecar itself or pid 1
+            me = psutil.Process()
+            if pid == int(me.pid) or pid == 1:
+                raise HTTPException(400, "refusing to kill sidecar or init")
+            name = ""
+            try:
+                name = proc.name() or ""
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                name = ""
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except psutil.TimeoutExpired:
+                try:
+                    proc.kill()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+            return {"ok": True, "killed": pid, "name": name, "by": "pid"}
+        except psutil.NoSuchProcess:
+            raise HTTPException(404, f"no such process: {pid}")
+        except psutil.AccessDenied as exc:
+            raise HTTPException(403, f"access denied killing {pid}: {exc}")
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(500, str(exc))
+
     @app.delete("/v1/models/local")
     def delete_local_model(file: str = Query(...)):
         try:
@@ -1980,12 +2207,21 @@ def create_app(
 
     @app.post("/v1/server/start")
     def server_start(req: ServerStartRequest):
+        # embedding validation mirrors manager.load pooling check
+        if req.pooling is not None and not req.embedding:
+            raise HTTPException(422, "pooling requires embedding=True")
+        if req.pooling is not None and req.pooling.strip().lower() not in (
+                "mean", "cls", "last"):
+            raise HTTPException(422, "unknown pooling; known: mean, cls, last")
         try:
             info = models_manager.load(
                 model=req.model, hf_repo=req.hf_repo, hf_file=req.hf_file,
                 key=req.key, port=req.port, ctx_size=req.ctx_size,
                 ngl=req.ngl, extra_args=req.extra_args(),
                 backend=req.backend,
+                embedding=bool(req.embedding),
+                pooling=req.pooling.strip().lower() if req.pooling else None,
+                mmproj=req.mmproj,
             )
         except RuntimeError as exc:
             message = str(exc)
@@ -2037,6 +2273,130 @@ def create_app(
     def local_models():
         return {"models_dir": str(models_manager.models_dir),
                 "models": models_manager.list_local()}
+
+    @app.post("/v1/embeddings")
+    async def create_embeddings(request: Request):
+        """OpenAI-compatible embeddings endpoint.
+
+        Proxies to a loaded embedding llama-server (``--embedding``) when
+        available, otherwise computes embeddings locally via the hive's
+        ultra-small drone (offline fallback). Accepts the same wire shape
+        as ``POST /v1/embeddings`` from llama-server / OpenAI.
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(422, "invalid JSON")
+        raw_input = body.get("input")
+        if raw_input is None:
+            raise HTTPException(422, "input is required")
+        # normalize input to list[str]
+        if isinstance(raw_input, str):
+            inputs: list[str] = [raw_input]
+        elif isinstance(raw_input, list):
+            if not raw_input:
+                raise HTTPException(422, "input must not be empty")
+            # reject token-array inputs (list of ints) — not text embeddings
+            if any(isinstance(x, int) for x in raw_input):
+                raise HTTPException(422, "input must be text, not token ids")
+            if any(not isinstance(x, str) for x in raw_input):
+                raise HTTPException(422, "input must be string or array of strings")
+            inputs = [str(x) for x in raw_input]
+        else:
+            raise HTTPException(422, "input must be string or array of strings")
+        if any(not s.strip() for s in inputs):
+            raise HTTPException(422, "input strings must not be empty")
+        model_name = str(body.get("model") or body.get("model_name") or "default")
+        encoding_format = body.get("encoding_format", "float")
+        if encoding_format not in ("float", "base64"):
+            raise HTTPException(422, "encoding_format must be float or base64")
+        # Try to proxy to a loaded embedding server
+        embedding_base: Optional[str] = None
+        try:
+            status = models_manager.status()
+            for inst in status.get("instances", []) or []:
+                if inst.get("embedding"):
+                    embedding_base = inst.get("base_url")
+                    if embedding_base:
+                        model_name = str(inst.get("model") or model_name)
+                    break
+        except Exception:
+            embedding_base = None
+        # optional env-based served embedding backend
+        if embedding_base is None:
+            env_url = os.environ.get("HARNESS_EMBEDDING_URL", "").strip()
+            if env_url and os.environ.get("HARNESS_EMBEDDING_BACKEND", "") == "served":
+                embedding_base = env_url.rstrip("/")
+        if embedding_base:
+            # proxy to llama-server's /v1/embeddings
+            base = embedding_base.rstrip("/")
+            # if base already ends with /v1, avoid double
+            if base.endswith("/v1"):
+                url = f"{base}/embeddings"
+            else:
+                url = f"{base}/v1/embeddings"
+            payload = {"model": model_name, "input": inputs}
+            # forward optional OpenAI fields when present
+            for k in ("encoding_format", "dimensions", "user"):
+                if k in body:
+                    payload[k] = body[k]
+            try:
+                resp = requests.post(url, json=payload, timeout=30)
+                resp.raise_for_status()
+                data = resp.json()
+                # ensure OpenAI shape even if upstream is slightly off
+                if "data" in data and isinstance(data["data"], list):
+                    return data
+                # wrap raw embeddings
+                items = data.get("data") or data.get("embeddings") or []
+                if items and isinstance(items[0], list):
+                    # items is list of vectors
+                    wrapped = [{"object": "embedding", "embedding": vec, "index": i}
+                               for i, vec in enumerate(items)]
+                    return {"object": "list", "data": wrapped, "model": model_name,
+                            "usage": {"prompt_tokens": sum(len(s.split()) for s in inputs),
+                                      "total_tokens": sum(len(s.split()) for s in inputs)}}
+                return data
+            except requests.RequestException as exc:
+                raise HTTPException(502, f"embedding backend error: {exc}")
+        # Fallback: local ultra-small drone
+        try:
+            drone = st.ultra()
+        except Exception as exc:
+            raise HTTPException(502, f"no embedding backend available: {exc}")
+        vectors: list[list[float]] = []
+        for text in inputs:
+            try:
+                vec = drone.embed(text)
+            except Exception as exc:
+                raise HTTPException(502, f"embedding failed: {exc}")
+            # drone may return numpy array
+            try:
+                arr = vec.tolist() if hasattr(vec, "tolist") else list(vec)
+            except Exception:
+                arr = [float(x) for x in vec]
+            vectors.append([float(x) for x in arr])
+        # encoding_format base64: encode each vector as base64 of float32 bytes
+        if encoding_format == "base64":
+            import base64
+            import struct
+
+            b64_vectors = []
+            for vec in vectors:
+                packed = struct.pack(f"{len(vec)}f", *vec)
+                b64_vectors.append(base64.b64encode(packed).decode("ascii"))
+            data = [{"object": "embedding", "embedding": b, "index": i}
+                    for i, b in enumerate(b64_vectors)]
+        else:
+            data = [{"object": "embedding", "embedding": vec, "index": i}
+                    for i, vec in enumerate(vectors)]
+        prompt_tokens = sum(len(s.split()) for s in inputs)
+        return {
+            "object": "list",
+            "data": data,
+            "model": model_name,
+            "usage": {"prompt_tokens": prompt_tokens, "total_tokens": prompt_tokens},
+        }
 
     @app.post("/v1/models/local/import")
     async def import_local_models(files: List[UploadFile] = File(...)):
@@ -2121,6 +2481,166 @@ def create_app(
             raise HTTPException(404, str(exc))
         except (NotADirectoryError, PermissionError, ValueError, RuntimeError, OSError) as exc:
             raise HTTPException(400, str(exc))
+
+    @app.post("/v1/agent-presets/copy")
+    async def agent_presets_copy(request: Request):
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(422, "invalid JSON")
+        src = str(body.get("from") or body.get("source") or "").strip()
+        dst = str(body.get("agentPreset") or body.get("id") or "").strip()
+        if not src or not dst:
+            raise HTTPException(422, "from and agentPreset required")
+        # Minimal copy: duplicate directory from shipped presets
+        import shutil
+        shipped = REPO_ROOT.parent / "hivebench-studio" / "apps" / "cli" / "config" / "agent-presets" / src
+        if not shipped.is_dir():
+            shipped = Path.home() / ".dsh" / ".agent-presets" / src
+        if not shipped.is_dir():
+            raise HTTPException(404, f"preset not found: {src}")
+        user_root = Path.home() / ".dsh" / ".agent-presets" / dst
+        if user_root.exists():
+            raise HTTPException(409, f"preset already exists: {dst}")
+        try:
+            shutil.copytree(shipped, user_root)
+        except Exception as exc:
+            raise HTTPException(500, str(exc))
+        return {"agentPreset": dst}
+
+    @app.post("/v1/agent-presets/remove")
+    async def agent_presets_remove(request: Request):
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(422, "invalid JSON")
+        pid = str(body.get("agentPreset") or body.get("id") or "").strip()
+        if not pid:
+            raise HTTPException(422, "agentPreset required")
+        target = Path.home() / ".dsh" / ".agent-presets" / pid
+        if not target.is_dir():
+            raise HTTPException(404, f"not a user preset: {pid}")
+        import shutil
+        try:
+            shutil.rmtree(target)
+        except Exception as exc:
+            raise HTTPException(500, str(exc))
+        return {}
+
+    @app.post("/v1/agent-presets/read")
+    async def agent_presets_read(request: Request):
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(422, "invalid JSON")
+        pid = str(body.get("agentPreset") or body.get("id") or "").strip()
+        if not pid:
+            raise HTTPException(422, "agentPreset required")
+        # Search shipped then user
+        candidates = [
+            REPO_ROOT.parent / "hivebench-studio" / "apps" / "cli" / "config" / "agent-presets" / pid / "agent.cordis.yml",
+            Path.home() / ".dsh" / ".agent-presets" / pid / "agent.cordis.yml",
+        ]
+        for cand in candidates:
+            if cand.is_file():
+                return {"agentPreset": pid, "content": cand.read_text(encoding="utf-8"), "trust": "user" if ".dsh" in str(cand) else "system"}
+        raise HTTPException(404, f"preset not found: {pid}")
+
+    @app.get("/v1/agent-presets/list")
+    def agent_presets_list():
+        # English display names for built-in presets. The preset.yml files on
+        # disk are Chinese (the source shipping language), but the Studio
+        # console is English-first, and the DSH web side localizes via
+        # locales.ts — so the sidecar also returns English for built-ins to
+        # avoid showing Chinese to an English-speaking operator.
+        _EN_PRESET = {
+            "standard": ("Standard mode",
+                         "Full coding agent with file editing, shell, file and web search, skills, planning, goals, subagents, and workflows.", 1),
+            "code": ("PTC mode",
+                     "All Standard mode capabilities, with tools exposed through the Code Mode SDK so the model can combine multi-step operations in one TypeScript program.", 2),
+            "minimal": ("Minimal mode",
+                        "Two-tool coding agent with persistent bash and str_replace_editor.", 3),
+            "cordis": ("Creator mode",
+                       "Built for creating custom agent presets, with all Standard mode capabilities plus runtime inspection, plugin experiments, and preset-authoring guidance.", 4),
+            "hive-curator": ("Hive Curator",
+                             "Standard coding agent plus Hive curation: each turn the local sidecar assembles relevant context and observes replies, ideal for long tasks and cross-session memory. Requires a local Hive sidecar; offline it degrades to Standard.", 4),
+            "local-first": ("Local-first",
+                            "Lean composition for local model routing: no cloud search or other cloud surfaces, keeps shell, filesystem, jobs, skills, goals, and planning. Use with a local inference backend or any in-session model.", 5),
+        }
+
+        def _preset_meta(dir_path: Path) -> dict:
+            meta = {"name": dir_path.name, "description": None, "order": 999, "broken": None}
+            preset_yml = dir_path / "preset.yml"
+            cordis_yml = dir_path / "agent.cordis.yml"
+            if not cordis_yml.is_file():
+                meta["broken"] = "missing agent.cordis.yml"
+            if preset_yml.is_file():
+                try:
+                    text = preset_yml.read_text(encoding="utf-8")
+                    for line in text.splitlines():
+                        line = line.strip()
+                        if line.startswith("name:"):
+                            v = line.split(":", 1)[1].strip().strip('"').strip("'")
+                            if v:
+                                meta["name"] = v
+                        elif line.startswith("description:"):
+                            v = line.split(":", 1)[1].strip().strip('"').strip("'")
+                            if v:
+                                meta["description"] = v
+                        elif line.startswith("order:"):
+                            try:
+                                meta["order"] = int(line.split(":", 1)[1].strip())
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+            # Override built-ins to English for the English-first Studio console
+            if dir_path.name in _EN_PRESET:
+                en_name, en_desc, en_order = _EN_PRESET[dir_path.name]
+                meta["name"] = en_name
+                meta["description"] = en_desc
+                meta["order"] = en_order
+            return meta
+
+        presets = []
+        shipped_root = REPO_ROOT.parent / "hivebench-studio" / "apps" / "cli" / "config" / "agent-presets"
+        if shipped_root.is_dir():
+            for d in shipped_root.iterdir():
+                if d.is_dir() and re.match(r"^[a-z0-9][a-z0-9-]*$", d.name):
+                    m = _preset_meta(d)
+                    presets.append({
+                        "id": d.name,
+                        "name": m["name"],
+                        "description": m["description"],
+                        "trust": "system",
+                        "broken": m["broken"],
+                        "order": m["order"],
+                        "isDefault": d.name == "standard",
+                    })
+        user_root = Path.home() / ".dsh" / ".agent-presets"
+        if user_root.is_dir():
+            for d in user_root.iterdir():
+                if d.is_dir() and re.match(r"^[a-z0-9][a-z0-9-]*$", d.name):
+                    presets = [p for p in presets if p["id"] != d.name]
+                    m = _preset_meta(d)
+                    presets.append({
+                        "id": d.name,
+                        "name": m["name"],
+                        "description": m["description"],
+                        "trust": "user",
+                        "broken": m["broken"],
+                        "order": m["order"],
+                        "isDefault": False,
+                    })
+        # Order by explicit order then id, user presets keep their order but appear after system by order value
+        presets.sort(key=lambda x: (x.get("order", 999), x["id"]))
+        # Strip internal order before returning, keep isDefault/broken/description for UI
+        for p in presets:
+            p.pop("order", None)
+            # Ensure description is present even if None -> UI shows id
+            if p.get("description") is None:
+                p.pop("description", None)
+        return {"presets": presets, "authorable": True, "hasDocument": True}
 
     @app.get("/v1/models/hub")
     def hub_search(q: str = "", limit: int = 12):

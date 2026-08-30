@@ -661,7 +661,8 @@ def test_hub_search_shapes_results(manager, monkeypatch):
     assert out[0]["last_modified"] == "2026-08-20"
 
 
-def test_hub_files_filters_mmproj_and_non_gguf(manager, monkeypatch):
+def test_hub_files_includes_mmproj_for_vision_models(manager, monkeypatch):
+    """Vision models need mmproj files; they are no longer filtered out."""
     monkeypatch.setattr(models_module.requests, "get",
                         lambda url, params=None, timeout=None: FakeResp([
                             {"path": "model-UD-Q4_K_M.gguf", "size": 5 * 1024 ** 3},
@@ -669,7 +670,10 @@ def test_hub_files_filters_mmproj_and_non_gguf(manager, monkeypatch):
                             {"path": "README.md", "size": 1},
                         ]))
     files = manager.hub_files("some/repo")
-    assert [f["file"] for f in files] == ["model-UD-Q4_K_M.gguf"]
+    file_names = [f["file"] for f in files]
+    assert "model-UD-Q4_K_M.gguf" in file_names
+    assert "mmproj-model.gguf" in file_names  # mmproj now visible for vision models
+    assert "README.md" not in file_names  # non-gguf still filtered
     assert files[0]["size_gb"] == 5.0
 
 
