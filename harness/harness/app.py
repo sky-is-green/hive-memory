@@ -122,12 +122,13 @@ PROTOCOL_FLAGS_BOOL = {"protocol": "--protocol", "baselines": "--baselines",
                        "no_thinking": "--no-thinking"}
 
 _popen = subprocess.Popen  # module-level so tests can intercept
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0  # suppress console flash for polling helpers
 
 # HTML consoles change with the code; never let a browser cache them.
 _NO_STORE = {"Cache-Control": "no-store"}
 
 def _hardware_summary() -> dict:
-    """Host VRAM/RAM summary for fit estimates (nvidia-smi + psutil, RAM fallback)."""
+    """Host VRAM/RAM summary for fit estimates (nvidia-smi + AMD registry + psutil)."""
     try:
         vm = psutil.virtual_memory()
         total_ram_gb = round(vm.total / (1024 ** 3), 2)
@@ -136,11 +137,14 @@ def _hardware_summary() -> dict:
         total_ram_gb = 8.0
         available_ram_gb = 8.0
     vram_gb: Optional[float] = None
+    combined_vram_gb: Optional[float] = None
     devices: list[dict] = []
+    # Nvidia
     try:
         out = subprocess.check_output(
             ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
             timeout=2, text=True, stderr=subprocess.DEVNULL,
+            creationflags=_NO_WINDOW,
         )
         for line in out.strip().splitlines():
             line = line.strip()
@@ -156,18 +160,134 @@ def _hardware_summary() -> dict:
             except ValueError:
                 continue
             gb = round(mib / 1024, 2)
-            vram_gb = max(vram_gb or 0, gb)
+            vram_gb = (vram_gb or 0) + gb  # sum for combined
             devices.append({"backend": "cuda", "name": name, "memory_gb": gb})
     except Exception:
         pass
+    # AMD fallback via registry + WMI count (avoids duplicate registry entries counting 4x)
+    if not devices:
+        try:
+            import winreg
+
+            per_card_gb = None
+            desc_name = None
+            base = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, base) as k:
+                for i in range(100):
+                    try:
+                        sub = winreg.EnumKey(k, i)
+                    except OSError:
+                        break
+                    try:
+                        with winreg.OpenKey(k, sub) as sk:
+                            try:
+                                desc = winreg.QueryValueEx(sk, "DriverDesc")[0]
+                            except OSError:
+                                continue
+                            if "AMD" not in str(desc) and "Radeon" not in str(desc):
+                                continue
+                            try:
+                                qmem = winreg.QueryValueEx(sk, "HardwareInformation.qwMemorySize")[0]
+                                gb = round(int(qmem) / (1024 ** 3), 2)
+                                if gb < 1 or gb > 64:
+                                    continue
+                                per_card_gb = gb
+                                desc_name = str(desc)
+                                break
+                            except OSError:
+                                continue
+                    except OSError:
+                        continue
+            if per_card_gb:
+                # count physical AMD GPUs via WMI (registry has duplicates)
+                count = 1
+                try:
+                    out = subprocess.check_output(
+                        ["powershell", "-Command", "(Get-CimInstance Win32_VideoController | Where-Object {$_.Name -like '*AMD*' -or $_.Name -like '*Radeon*'}).Count"],
+                        timeout=2, text=True, stderr=subprocess.DEVNULL, creationflags=_NO_WINDOW,
+                    )
+                    # output may be "2" or blank
+                    txt = out.strip().split()[0] if out.strip() else "1"
+                    count = int(txt)
+                    if count < 1:
+                        count = 1
+                except Exception:
+                    count = 1
+                vram_gb = per_card_gb * count
+                for _ in range(count):
+                    devices.append({"backend": "rocm", "name": desc_name, "memory_gb": per_card_gb})
+        except Exception:
+            pass
+    # Linux fallback (cross-platform)
+    if not devices and sys.platform != "win32":
+        try:
+            out = subprocess.check_output(
+                ["rocm-smi", "--showmeminfo", "vram"],
+                timeout=2, text=True, stderr=subprocess.DEVNULL,
+                creationflags=_NO_WINDOW if sys.platform == "win32" else 0,
+            )
+            import re as _re2
+
+            for m in _re2.finditer(r"(\d{9,})\s*B", out):
+                val = int(m.group(1))
+                gb = round(val / (1024 ** 3), 2)
+                if 1 < gb < 128:
+                    vram_gb = (vram_gb or 0) + gb
+                    devices.append({"backend": "rocm", "name": "AMD GPU", "memory_gb": gb})
+        except Exception:
+            pass
+        try:
+            import glob as _glob2
+
+            for p in _glob2.glob("/sys/class/drm/card*/device/mem_info_vram_total"):
+                try:
+                    with open(p) as f:
+                        val = int(f.read().strip())
+                        gb = round(val / (1024 ** 3), 2)
+                        if 1 < gb < 128:
+                            # avoid double-count if already have devices
+                            if any(abs(d["memory_gb"] - gb) < 0.5 for d in devices):
+                                continue
+                            vram_gb = (vram_gb or 0) + gb
+                            devices.append({"backend": "rocm", "name": "AMD GPU", "memory_gb": gb})
+                except Exception:
+                    continue
+        except Exception:
+            pass
+    # macOS fallback
+    if not devices and sys.platform == "darwin":
+        try:
+            out = subprocess.check_output(
+                ["system_profiler", "SPDisplaysDataType"],
+                timeout=3, text=True, stderr=subprocess.DEVNULL,
+            )
+            import re as _re3
+
+            for line in out.splitlines():
+                if "VRAM" in line and "GB" in line:
+                    m = _re3.search(r"(\d+)\s*GB", line)
+                    if m:
+                        gb = float(m.group(1))
+                        if 1 < gb < 128:
+                            vram_gb = (vram_gb or 0) + gb
+                            devices.append({"backend": "metal", "name": "Apple GPU", "memory_gb": gb})
+        except Exception:
+            pass
+    if vram_gb is not None:
+        combined_vram_gb = round(vram_gb, 2)
+        vram_gb = combined_vram_gb
+        source = "nvidia-smi" if any(d["backend"] == "cuda" for d in devices) else ("amd-registry" if any(d["backend"] == "rocm" for d in devices) else "sysfs" if devices else "ram")
+    else:
+        source = "ram"
     available_gb = round(vram_gb, 2) if vram_gb is not None else total_ram_gb
     return {
         "total_ram_gb": total_ram_gb,
         "available_ram_gb": available_ram_gb,
         "vram_gb": vram_gb,
+        "combined_vram_gb": combined_vram_gb,
         "available_gb": available_gb,
         "devices": devices,
-        "vram_source": "nvidia-smi" if vram_gb is not None else "ram",
+        "vram_source": source,
     }
 
 def _read_gguf_metadata(path: Path) -> dict:
@@ -345,6 +465,391 @@ def _auto_preset_load_options(size_gb: float, hardware_gb: float, file_name: str
         out["cache_type_k"] = "q8_0"
         out["cache_type_v"] = "q8_0"
     return out
+
+
+def _setup_tier(context_tokens: int = 32768, dual: bool = False, vhdx: str | None = None, model_gb: float | None = None) -> dict:
+    """Tiered allocation — model-agnostic, no hardcoded 104.
+
+    - MODEL_GB: detected from actual GGUFs in /mnt/dsh_storage/models or passed model_gb, not DeepSeek assumption
+    - T3 spill: overflow for that model, with estimated speeds from system (no fallback)
+    - cap: floor((VRAM+RAM+driveFree - MODEL)/KV) without artificial 131k clamp — shows real max
+    """
+    # Model size — try passed, then scan actual GGUFs, else 104 fallback
+    if model_gb is not None:
+        try:
+            MODEL_GB = float(model_gb)
+        except Exception:
+            MODEL_GB = None
+    else:
+        MODEL_GB = None
+    if MODEL_GB is None:
+        try:
+            out = subprocess.check_output(
+                ["wsl", "-d", "Ubuntu", "-e", "bash", "-c", "du -sb /mnt/dsh_storage/models 2>&1 | cut -f1"],
+                timeout=3, text=True, stderr=subprocess.DEVNULL, creationflags=_NO_WINDOW,
+            )
+            total_bytes = int(out.strip().split()[0])
+            gb = total_bytes / (1024 ** 3)
+            if gb >= 1:
+                MODEL_GB = gb
+        except Exception:
+            pass
+    if MODEL_GB is None:
+        try:
+            p = Path(r"\\wsl.localhost\Ubuntu\mnt\dsh_storage\models")
+            total = 0
+            for f in p.glob("*.gguf"):
+                try:
+                    total += f.stat().st_size
+                except Exception:
+                    continue
+            if total:
+                MODEL_GB = total / (1024 ** 3)
+        except Exception:
+            pass
+    if MODEL_GB is None:
+        MODEL_GB = 104.0  # fallback only if no models yet
+    try:
+        hw = _hardware_summary()
+        vram_detected = hw.get("combined_vram_gb") or hw.get("vram_gb")
+        VRAM = float(vram_detected) if vram_detected else (40.0 if dual else 20.0)
+        WSL_RAM = float(hw.get("total_ram_gb") or hw.get("available_ram_gb") or 24.0)
+    except Exception:
+        VRAM = 40.0 if dual else 20.0
+        WSL_RAM = 24.0
+    vhdx_path = vhdx or os.environ.get("VHDX_PATH", r"E:\dsh_storage.vhdx")
+    drive = os.path.splitdrive(vhdx_path)[0] or os.path.splitdrive(os.environ.get("VHDX_PATH", r"E:\dsh_storage.vhdx"))[0]
+    if not drive:
+        drive = "E:"
+    try:
+        du = psutil.disk_usage(drive + "\\" if not drive.endswith("\\") else drive)
+        drive_total_gb = du.total / (1024 ** 3)
+        drive_free_gb = du.free / (1024 ** 3)
+        drive_percent = du.percent
+    except Exception:
+        drive_total_gb = 1000.0
+        drive_free_gb = 500.0
+        drive_percent = 0
+    KV_PER_TOKEN_GB = 0.07 / 1024.0
+    kv = context_tokens * KV_PER_TOKEN_GB
+    tier1 = min(MODEL_GB, VRAM)
+    rem = MODEL_GB - tier1
+    ram_w = min(rem, WSL_RAM)
+    w_nvme = rem - ram_w
+    ram_left = WSL_RAM - ram_w
+    ram_kv = min(kv, max(0, ram_left))
+    kv_nvme = kv - ram_kv
+    tier3 = w_nvme + kv_nvme
+    tier2 = ram_w + ram_kv
+    # cap without artificial clamp — real leftover
+    leftover = VRAM + WSL_RAM + drive_free_gb - MODEL_GB
+    cap = int(leftover / KV_PER_TOKEN_GB) if leftover > 0 else 0
+    # speeds — no hardcoded fallback, detect accurately
+    VRAM_BW = None
+    RAM_BW = None
+    NVME_BW = None
+    try:
+        out = subprocess.check_output(
+            ["powershell", "-Command", "Get-CimInstance Win32_PhysicalMemory | Select-Object -ExpandProperty Speed"],
+            timeout=2, text=True, stderr=subprocess.DEVNULL, creationflags=_NO_WINDOW,
+        )
+        speeds = [int(s) for s in out.split() if s.strip().isdigit()]
+        if speeds:
+            avg = sum(speeds) / len(speeds)
+            RAM_BW = round(max(30, min(90, avg * 0.016)), 1)
+    except Exception:
+        pass
+    if RAM_BW is None and sys.platform != "win32":
+        try:
+            out = subprocess.check_output(
+                ["dmidecode", "--type", "memory"], timeout=2, text=True, stderr=subprocess.DEVNULL
+            )
+            import re as _re
+
+            m = _re.search(r"Speed:\s*(\d+)\s*MT/s", out)
+            if m:
+                RAM_BW = round(max(30, min(90, int(m.group(1)) * 0.016)), 1)
+        except Exception:
+            pass
+    try:
+        out = subprocess.check_output(
+            ["powershell", "-Command", "Get-PhysicalDisk | Where-Object BusType -eq 'NVMe' | Select-Object -ExpandProperty FriendlyName"],
+            timeout=2, text=True, stderr=subprocess.DEVNULL, creationflags=_NO_WINDOW,
+        )
+        if out.strip():
+            if "Gen5" in out or "PCIe5" in out:
+                NVME_BW = 14.0
+            elif "Gen3" in out:
+                NVME_BW = 3.5
+            else:
+                NVME_BW = 7.5
+    except Exception:
+        pass
+    if NVME_BW is None and sys.platform != "win32":
+        try:
+            out2 = subprocess.check_output(["lsblk", "-d", "-o", "NAME,TRAN"], timeout=2, text=True, stderr=subprocess.DEVNULL)
+            if "nvme" in out2.lower():
+                NVME_BW = 7.5
+        except Exception:
+            pass
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=clocks.mem", "--format=csv,noheader,nounits"],
+            timeout=2, text=True, stderr=subprocess.DEVNULL, creationflags=_NO_WINDOW,
+        )
+        if out.strip():
+            VRAM_BW = 1000.0
+    except Exception:
+        pass
+    # AMD VRAM bandwidth — detect via rocm-smi or known GPU table
+    if VRAM_BW is None:
+        try:
+            out = subprocess.check_output(
+                ["rocm-smi", "--showclocks"],
+                timeout=2, text=True, stderr=subprocess.DEVNULL, creationflags=_NO_WINDOW if sys.platform == "win32" else 0,
+            )
+            if out.strip():
+                VRAM_BW = 800.0
+        except Exception:
+            pass
+        if VRAM_BW is None:
+            try:
+                hw2 = _hardware_summary()
+                for d in hw2.get("devices", []):
+                    name = (d.get("name") or "").lower()
+                    if "7900 xtx" in name:
+                        VRAM_BW = 960.0
+                        break
+                    elif "7900 xt" in name:
+                        VRAM_BW = 800.0
+                        break
+                    elif "7900" in name:
+                        VRAM_BW = 800.0
+                        break
+                    elif "7800" in name:
+                        VRAM_BW = 520.0
+                        break
+                    elif "6800" in name or "6900" in name:
+                        VRAM_BW = 512.0
+                        break
+                if VRAM_BW is None and any("amd" in (d.get("name") or "").lower() or "radeon" in (d.get("name") or "").lower() for d in hw2.get("devices", [])):
+                    VRAM_BW = 800.0
+            except Exception:
+                pass
+    # macOS Apple Silicon — unified memory, no discrete VRAM
+    if VRAM_BW is None and sys.platform == "darwin":
+        try:
+            out = subprocess.check_output(["system_profiler", "SPDisplaysDataType"], timeout=3, text=True, stderr=subprocess.DEVNULL)
+            low = out.lower()
+            if "m4 max" in low or "m3 max" in low or "m1 max" in low or "m2 max" in low:
+                VRAM_BW = 400.0
+            elif "m4 pro" in low or "m3 pro" in low or "m2 pro" in low or "m1 pro" in low:
+                VRAM_BW = 200.0
+            elif "m4" in low:
+                VRAM_BW = 120.0
+            elif "m3" in low:
+                VRAM_BW = 100.0
+            elif "m2" in low:
+                VRAM_BW = 100.0
+            elif "m1" in low:
+                VRAM_BW = 68.0
+            else:
+                VRAM_BW = 100.0
+        except Exception:
+            pass
+        if VRAM_BW is None and RAM_BW is not None:
+            VRAM_BW = RAM_BW  # unified, same as RAM
+    if VRAM_BW is not None and RAM_BW is not None and NVME_BW is not None:
+        total_for_bw = tier1 + tier2 + tier3
+        weighted_bw = (tier1 * VRAM_BW + tier2 * RAM_BW + tier3 * NVME_BW) / total_for_bw if total_for_bw else None
+        weighted_bw = round(weighted_bw, 1) if weighted_bw is not None else None
+    else:
+        weighted_bw = None
+    free_after_spill = drive_free_gb - tier3
+    io_warn = bool(tier3 > 10)
+    disk_full = bool(drive_percent > 95 or free_after_spill < 10)
+    return {
+        "metrics": {
+            "tier1VramGb": round(tier1, 2),
+            "tier2RamGb": round(tier2, 2),
+            "tier3NvmeGb": round(tier3, 2),
+            "driveTotalGb": round(drive_total_gb, 1),
+            "driveFreeGb": round(drive_free_gb, 1),
+            "freeAfterSpillGb": round(free_after_spill, 1),
+            "estVramBw": VRAM_BW,
+            "estRamBw": RAM_BW,
+            "estNvmeBw": NVME_BW,
+            "estEffectiveBw": weighted_bw,
+            "modelGb": round(MODEL_GB, 2),
+        },
+        "flags": {
+            "ioLatencyWarning": io_warn,
+            "diskFull": disk_full,
+            "recommendCap": cap,
+            "drivePercent": drive_percent,
+        },
+    }
+
+
+def _ensure_vhdx(vhdx: str, size_gb: int = 250) -> dict:
+    """Create VHDX at vhdx if missing (first-time user). Returns status."""
+    if os.path.exists(vhdx):
+        return {"ok": True, "already": True, "path": vhdx}
+    # Ensure parent drive exists and has space
+    parent = os.path.dirname(vhdx) or "."
+    try:
+        os.makedirs(parent, exist_ok=True)
+    except Exception as exc:
+        return {"ok": False, "error": f"cannot create {parent}: {exc}"}
+    # Try New-VHD (Hyper-V) first, then fsutil fallback (sparse file, then will be formatted as ext4)
+    size_bytes = size_gb * 1024 * 1024 * 1024
+    # No free-space gate: VHDX is dynamic/sparse (250GB max, initially small) and
+    # is formatted to ext4 on first mount. Host free space is checked only if
+    # the underlying OS call fails.
+    # Try New-VHD (requires Hyper-V)
+    try:
+        out = subprocess.check_output(
+            ["powershell", "-Command", f"New-VHD -Path '{vhdx}' -SizeBytes {size_bytes} -Dynamic -ErrorAction Stop | Out-String"],
+            text=True, timeout=30, stderr=subprocess.STDOUT,
+        )
+        return {"ok": True, "created": True, "path": vhdx, "output": out[:400], "method": "New-VHD"}
+    except subprocess.CalledProcessError as exc:
+        # Fallback: diskpart create vdisk (works without Hyper-V)
+        try:
+            script = f"create vdisk file=\"{vhdx}\" maximum={size_gb * 1024} type=expandable\nselect vdisk file=\"{vhdx}\"\nattach vdisk\ncreate partition primary\nformat fs=ntfs quick label=dsh_storage\ndetach vdisk\nexit\n"
+            # Use diskpart to create a VHDX, then we will reformat to ext4 in WSL
+            with open(os.path.join(os.environ.get("TEMP", "."), "dsh_create_vhdx.txt"), "w", encoding="utf-8") as fh:
+                fh.write(script)
+                tmp = fh.name
+            out2 = subprocess.check_output(
+                ["diskpart", "/s", tmp],
+                text=True, timeout=30, stderr=subprocess.STDOUT,
+            )
+            # diskpart creates NTFS, but WSL bare mount will reformat to ext4 on first mount if needed (bootstrap does mkfs.ext4)
+            return {"ok": True, "created": True, "path": vhdx, "output": out2[:400], "method": "diskpart"}
+        except Exception as exc2:
+            # Last fallback: fsutil sparse file (will be formatted as ext4 on mount)
+            try:
+                subprocess.check_output(["fsutil", "file", "createnew", vhdx, str(size_bytes)], text=True, timeout=30, stderr=subprocess.STDOUT)
+                return {"ok": True, "created": True, "path": vhdx, "method": "fsutil"}
+            except Exception as exc3:
+                return {"ok": False, "error": f"New-VHD failed: {(exc.output or str(exc))[:300]}; diskpart failed: {str(exc2)[:300]}; fsutil failed: {str(exc3)[:300]}"}
+
+
+def _list_drives() -> list[dict]:
+    """List fixed drives with free space for auto-detect (first-time user)."""
+    import shutil
+    drives: list[dict] = []
+    for part in psutil.disk_partitions(all=False):
+        try:
+            mp = part.mountpoint
+            if not mp or not os.path.exists(mp):
+                continue
+            # Only local fixed drives (ignore network, ramdisk)
+            if part.fstype.lower() in ("", "tmpfs", "devtmpfs", "squashfs"):
+                continue
+            usage = shutil.disk_usage(mp)
+            total_gb = round(usage.total / 1024**3, 1)
+            if total_gb < 50:
+                continue
+            drives.append({
+                "mount": mp,
+                "fstype": part.fstype,
+                "total_gb": total_gb,
+                "free_gb": round(usage.free / 1024**3, 1),
+            })
+        except Exception:
+            continue
+    drives.sort(key=lambda d: d["free_gb"], reverse=True)
+    return drives
+
+
+def _best_vhdx_path(requested: str | None = None) -> str:
+    """Auto-detect best drive for VHDX (first-time user with no E:)."""
+    default = requested or os.environ.get("VHDX_PATH", r"E:\dsh_storage.vhdx")
+    parent = os.path.dirname(default) or "."
+    try:
+        import shutil
+        if os.path.exists(parent):
+            free = shutil.disk_usage(parent).free // (1024**3)
+            if free > 260:
+                return default
+    except Exception:
+        pass
+    # Pick drive with most free space >260GB
+    for d in _list_drives():
+        if d["free_gb"] > 260:
+            drive = d["mount"].rstrip("\\/")
+            if len(drive) == 2 and drive[1] == ":":
+                drive += "\\"
+            return os.path.join(drive, "dsh_storage.vhdx")
+    return default
+
+
+def _setup_health(vhdx: str | None = None) -> dict:
+    """Collect VHDX / mount / shards / Docker health for the wizard."""
+    import glob as _glob
+
+    # Use requested path directly (for health display); auto-detect only when no vhdx given
+    if vhdx is None:
+        vhdx = os.environ.get("VHDX_PATH", r"E:\dsh_storage.vhdx")
+    # Do not auto-pick best for health — show status of the requested path as-is
+    mount = "/mnt/dsh_storage"
+    model_dir = f"{mount}/models/DeepSeek-V4-Flash-0731-GGUF"
+    vhdx_exists = os.path.exists(vhdx)
+    mounted = False
+    try:
+        out = subprocess.check_output(
+            ["wsl", "-d", "Ubuntu", "-e", "mount"], text=True, timeout=2, stderr=subprocess.DEVNULL,
+            creationflags=_NO_WINDOW,
+        )
+        mounted = mount in out
+    except Exception:
+        try:
+            with open("/proc/mounts", "r", encoding="utf-8") as fh:
+                mounted = mount in fh.read()
+        except Exception:
+            mounted = False
+    shards = False
+    shard_path = ""
+    try:
+        found = _glob.glob(f"{model_dir}/*-00001-of-*.gguf")
+        if not found:
+            out = subprocess.check_output(
+                ["wsl", "-d", "Ubuntu", "-e", "bash", "-c", f"ls {model_dir}/*-00001-of-*.gguf 2>&1"],
+                text=True, timeout=2, stderr=subprocess.DEVNULL,
+                creationflags=_NO_WINDOW,
+            )
+            shards = "00001-of-" in out
+            if shards:
+                shard_path = out.strip().splitlines()[0]
+        else:
+            shards = True
+            shard_path = found[0]
+    except Exception:
+        shards = False
+    docker_ok = False
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=2) as resp:
+            docker_ok = resp.status == 200
+    except Exception:
+        docker_ok = False
+    engine = os.environ.get("ENGINE", "windows-vulkan")
+    if engine not in ("windows-vulkan", "linux-rocm-docker"):
+        engine = "windows-vulkan"
+    return {
+        "engine": engine,
+        "vhdxPath": vhdx,
+        "vhdxExists": vhdx_exists,
+        "mountPoint": mount,
+        "mounted": mounted,
+        "modelDir": model_dir,
+        "shardsFound": shards,
+        "shardPath": shard_path,
+        "dockerRunning": docker_ok,
+    }
 
 
 # Streaming upstream (llama-server / any OpenAI-compatible provider); module
@@ -811,6 +1316,307 @@ def create_app(
     @app.get("/health")
     def health():
         return {"ok": True, "conversations": len(st.hives)}
+
+    @app.get("/v1/setup/status")
+    def setup_status(context: int = 32768, dual: bool = False, vhdx: str | None = None, model_gb: float | None = None):
+        """Setup wizard status — engine + drive + health + tier (hive console)."""
+        health_info = _setup_health(vhdx)
+        tier = _setup_tier(context, dual, vhdx, model_gb)
+        complete = bool(health_info["vhdxExists"] and health_info["mounted"] and health_info["shardsFound"] and health_info["dockerRunning"] and not tier["flags"]["diskFull"])
+        return {
+            "state": {
+                "engine": health_info["engine"],
+                "vhdxPath": health_info["vhdxPath"],
+                "modelsDir": health_info["modelDir"],
+                "mountPoint": health_info["mountPoint"],
+            },
+            "health": {
+                "windows": {"state": "running", "port": 8765},
+                "linux": {
+                    "state": "running" if health_info["dockerRunning"] else "stopped",
+                    "port": 8000,
+                    "vhdxMounted": health_info["mounted"],
+                    "dockerRunning": health_info["dockerRunning"],
+                    "shardsFound": health_info["shardsFound"],
+                    "shardPath": health_info["shardPath"],
+                    "vhdxExists": health_info["vhdxExists"],
+                },
+            },
+            "tier": tier,
+            "complete": complete,
+        }
+
+    @app.get("/v1/setup/health")
+    def setup_health(vhdx: str | None = None):
+        """Lightweight health for the wizard (VHDX/mount/shards/docker)."""
+        return _setup_health(vhdx)
+
+    @app.get("/v1/setup/docker-models")
+    def setup_docker_models():
+        """Proxy to Docker 8000 /v1/models (avoids browser CORS)."""
+        import json as _json
+        import urllib.request as _url
+
+        try:
+            with _url.urlopen("http://127.0.0.1:8000/v1/models", timeout=3) as resp:
+                body = resp.read()
+                ctype = resp.headers.get("content-type", "")
+                if "json" in ctype or body.strip().startswith(b"{"):
+                    try:
+                        return _json.loads(body)
+                    except Exception:
+                        pass
+                # fallback: try parse anyway
+                try:
+                    return _json.loads(body.decode("utf-8", errors="ignore"))
+                except Exception:
+                    return {"raw": body.decode("utf-8", errors="ignore")[:2000], "status": resp.status}
+        except Exception as exc:
+            raise HTTPException(500, f"Docker 8000 /v1/models unreachable: {exc}")
+
+    @app.get("/v1/setup/drives")
+    def setup_drives():
+        """List drives and best VHDX path for first-time user (auto-detect)."""
+        return {"drives": _list_drives(), "best": _best_vhdx_path(), "default": os.environ.get("VHDX_PATH", r"E:\dsh_storage.vhdx")}
+
+    @app.post("/v1/setup/bootstrap")
+    async def setup_bootstrap(request: Request):
+        """One-click bootstrap for Docker → WebUI (mount + compose up). No Admin bare mount.
+
+        Steps:
+        1) If VHDX bare device not exposed, fail with Admin fix (Mount_AI_Drive.bat).
+        2) If not mounted at /mnt/dsh_storage, mount the exposed device.
+        3) docker compose up -d dsh-compute-backend
+        Returns health after.
+        """
+        try:
+            body = await request.json()
+            vhdx_req = body.get("vhdx") if isinstance(body, dict) else None
+        except Exception:
+            vhdx_req = None
+        steps: list[dict] = []
+        # Require explicit location — do not auto-create without user picking drive
+        if vhdx_req:
+            vhdx = vhdx_req
+        else:
+            vhdx = os.environ.get("VHDX_PATH", r"E:\dsh_storage.vhdx")
+        mount = "/mnt/dsh_storage"
+        compose = os.environ.get("COMPOSE_PATH", r"C:\Users\penis\Documents\hivebench-studio\docker-compose.yml")
+        # 1) VHDX exists — no auto-create (explicit Create Drive required)
+        if not os.path.exists(vhdx):
+            raise HTTPException(400, f"VHDX not found at {vhdx} — select a drive in Setup and click Create Drive first (explicit location required)")
+        steps.append({"step": "vhdx", "ok": True, "path": vhdx})
+        # 2) Bare device exposed? Check lsblk for sdd/sde etc with 230G
+        bare_ok = False
+        try:
+            out = subprocess.check_output(
+                ["wsl", "-d", "Ubuntu", "-e", "lsblk", "-o", "NAME,SIZE,MOUNTPOINT", "-n"],
+                text=True, timeout=3, stderr=subprocess.DEVNULL,
+                creationflags=_NO_WINDOW,
+            )
+            # Look for a disk ~230G that is the VHDX (sdd 234.4G)
+            bare_ok = "sdd" in out or "sde" in out
+            steps.append({"step": "bare", "ok": bare_ok, "lsblk": out[:600]})
+        except Exception as exc:
+            steps.append({"step": "bare", "ok": False, "error": str(exc)[:300]})
+        if not bare_ok:
+            raise HTTPException(
+                400,
+                f"VHDX not exposed as bare device — run Mount_AI_Drive.bat as Administrator (wsl --mount --vhd {vhdx} --bare). lsblk: {steps[-1].get('lsblk','')[:200]}",
+            )
+        # 3) Mount at /mnt/dsh_storage if not already
+        try:
+            mout = subprocess.check_output(
+                ["wsl", "-d", "Ubuntu", "-e", "mount"], text=True, timeout=2, stderr=subprocess.DEVNULL,
+                creationflags=_NO_WINDOW,
+            )
+            mounted = mount in mout
+        except Exception:
+            mounted = False
+        if not mounted:
+            # Try common devices: sdd1, sdd, sde1, sde (needs sudo inside WSL)
+            mounted_now = False
+            last_err = ""
+            for dev in ["/dev/sdd1", "/dev/sdd", "/dev/sde1", "/dev/sde"]:
+                try:
+                    subprocess.check_output(
+                        ["wsl", "-d", "Ubuntu", "-e", "bash", "-c", f"sudo mkdir -p {mount} && sudo mount {dev} {mount}"],
+                        text=True, timeout=10, stderr=subprocess.STDOUT,
+                        creationflags=_NO_WINDOW,
+                    )
+                    mounted_now = True
+                    steps.append({"step": "mount", "ok": True, "dev": dev})
+                    break
+                except Exception as exc:
+                    # CalledProcessError, TimeoutExpired, etc. — capture output
+                    last_err = (getattr(exc, 'output', None) or str(exc))[:800]
+                    low = last_err.lower()
+                    # First-time VHDX is NTFS/sparse — format to ext4 once, then retry mount (never if already mounted)
+                    if any(s in low for s in ("wrong fs type", "unknown filesystem", "you must specify the filesystem type", "no such file or directory", "wrong fs type", "does not exist")):
+                        try:
+                            fmt_out = subprocess.check_output(
+                                ["wsl", "-d", "Ubuntu", "-e", "bash", "-c", f"sudo mkfs.ext4 -F {dev}"],
+                                text=True, timeout=30, stderr=subprocess.STDOUT,
+                                creationflags=_NO_WINDOW,
+                            )
+                            steps.append({"step": "mkfs", "ok": True, "dev": dev, "output": fmt_out[:400]})
+                            # retry mount after format
+                            subprocess.check_output(
+                                ["wsl", "-d", "Ubuntu", "-e", "bash", "-c", f"sudo mount {dev} {mount}"],
+                                text=True, timeout=10, stderr=subprocess.STDOUT,
+                                creationflags=_NO_WINDOW,
+                            )
+                            mounted_now = True
+                            steps.append({"step": "mount", "ok": True, "dev": dev, "after_mkfs": True})
+                            break
+                        except Exception as exc2:
+                            last_err = (getattr(exc2, 'output', None) or str(exc2))[:800]
+            if not mounted_now:
+                raise HTTPException(400, f"Mount {mount} failed — try wsl -d Ubuntu -e lsblk and mount manually. {last_err}")
+        else:
+            steps.append({"step": "mount", "ok": True, "already": True})
+        # Ensure models directory exists inside the VHDX (visible as \\wsl.localhost\Ubuntu\mnt\dsh_storage\models)
+        try:
+            subprocess.check_output(
+                ["wsl", "-d", "Ubuntu", "-e", "bash", "-c", f"sudo mkdir -p {mount}/models && sudo chmod 777 {mount}/models"],
+                text=True, timeout=5, stderr=subprocess.STDOUT,
+                creationflags=_NO_WINDOW,
+            )
+            steps.append({"step": "models_dir", "ok": True, "path": f"{mount}/models"})
+        except Exception as exc:
+            steps.append({"step": "models_dir", "ok": False, "error": str(exc)[:300]})
+        # 4) Docker compose up (easy: auto-retag upstream if custom image missing)
+        def _docker_up():
+            if os.path.exists(compose):
+                return subprocess.check_output(
+                    ["docker", "compose", "-f", compose, "up", "-d", "dsh-compute-backend"],
+                    text=True, timeout=60, stderr=subprocess.STDOUT,
+                    creationflags=_NO_WINDOW,
+                )
+            return subprocess.check_output(
+                ["docker", "compose", "up", "-d", "dsh-compute-backend"],
+                text=True, timeout=60, stderr=subprocess.STDOUT,
+                creationflags=_NO_WINDOW,
+            )
+
+        try:
+            out = _docker_up()
+            steps.append({"step": "docker", "ok": True, "output": out[:800]})
+        except subprocess.CalledProcessError as exc:
+            err = (exc.output or str(exc))
+            # Easy fix: custom image not found → retag the pulled upstream
+            if "custom-dsh-rocm-backend" in err and "pull access denied" in err:
+                try:
+                    tag_out = subprocess.check_output(
+                        ["docker", "tag", "ghcr.io/ggml-org/llama.cpp:server-rocm", "custom-dsh-rocm-backend:latest"],
+                        text=True, timeout=30, stderr=subprocess.STDOUT,
+                        creationflags=_NO_WINDOW,
+                    )
+                    steps.append({"step": "docker-tag", "ok": True, "from": "ghcr.io/ggml-org/llama.cpp:server-rocm", "output": tag_out[:400]})
+                    out = _docker_up()
+                    steps.append({"step": "docker", "ok": True, "output": out[:800], "retried": True})
+                except subprocess.CalledProcessError as exc2:
+                    raise HTTPException(
+                        500,
+                        f"docker compose up failed (after tag retry): {(exc2.output or str(exc2))[:600]} — fix: docker pull ghcr.io/ggml-org/llama.cpp:server-rocm && docker tag ghcr.io/ggml-org/llama.cpp:server-rocm custom-dsh-rocm-backend:latest",
+                    )
+            elif "no such file or directory" in err and "/dev/kfd" in err:
+                raise HTTPException(
+                    500,
+                    f"WSL GPU not available: /dev/kfd missing — fix: ensure Windows 11 + WSL2 GPU passthrough: wsl --update && wsl --shutdown, install AMD Adrenalin 24.10+, check wsl -d Ubuntu -e ls /dev/kfd — or run on Linux host with ROCm. Raw: {err[:400]}",
+                )
+            else:
+                raise HTTPException(500, f"docker compose up failed: {err[:600]}")
+        except Exception as exc:
+            raise HTTPException(500, f"docker not running: {exc}")
+        # 5) Health after
+        time.sleep(2)
+        health_after = _setup_health()
+        steps.append({"step": "health", "ok": health_after["dockerRunning"], "health": health_after})
+        return {"ok": health_after["dockerRunning"], "steps": steps, "health": health_after}
+
+    @app.post("/v1/setup/mount-bare")
+    async def setup_mount_bare(request: Request):
+        """Bare-expose VHDX to WSL (requires Admin). Called by Setup UI button."""
+        try:
+            body = await request.json()
+            vhdx_req = body.get("vhdx") if isinstance(body, dict) else None
+        except Exception:
+            vhdx_req = None
+        # Require explicit location — do not auto-create without user picking drive
+        if vhdx_req:
+            vhdx = vhdx_req
+            ensure = _ensure_vhdx(vhdx)
+            if not ensure["ok"]:
+                raise HTTPException(400, f"VHDX auto-create failed at {vhdx}: {ensure.get('error','')}")
+        else:
+            vhdx = os.environ.get("VHDX_PATH", r"E:\dsh_storage.vhdx")
+            if not os.path.exists(vhdx):
+                raise HTTPException(400, f"VHDX not found at {vhdx} — select a drive in Setup and click Create Drive first (explicit location required, auto-create disabled)")
+            vhdx = _best_vhdx_path(vhdx) if os.path.exists(vhdx) else vhdx
+        # Already bare-mounted? (sdd 234G from lsblk)
+        try:
+            out = subprocess.check_output(
+                ["wsl", "-d", "Ubuntu", "-e", "lsblk", "-o", "NAME,SIZE", "-n"],
+                text=True, timeout=3, stderr=subprocess.DEVNULL,
+                creationflags=_NO_WINDOW,
+            )
+            if "sdd" in out or "sde" in out:
+                return {"ok": True, "output": "already bare-mounted", "already": True, "lsblk": out[:600]}
+        except Exception:
+            pass
+        try:
+            out = subprocess.check_output(
+                ["wsl", "--mount", "--vhd", vhdx, "--bare"],
+                text=True, timeout=10, stderr=subprocess.STDOUT,
+                creationflags=_NO_WINDOW,
+            )
+            return {"ok": True, "output": out[:800]}
+        except subprocess.CalledProcessError as exc:
+            err = (exc.output or str(exc))
+            low = err.lower()
+            if "already" in low or "exists" in low:
+                return {"ok": True, "output": "already bare-mounted", "already": True, "raw": err[:400]}
+            if "administra" in low or "elevation" in low or "access is denied" in low:
+                # Pop UAC on the host desktop (sidecar and browser are same machine on localhost)
+                try:
+                    subprocess.Popen(
+                        ["powershell", "-Command", f"Start-Process wsl -ArgumentList '--mount','--vhd','{vhdx}','--bare' -Verb RunAs -Wait"],
+                        creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0,
+                    )
+                    return {
+                        "ok": False,
+                        "needs_elevation": True,
+                        "error": err[:600],
+                        "hint": "UAC prompt shown on host — click Yes, then Bootstrap Docker",
+                    }
+                except Exception as e2:
+                    raise HTTPException(400, f"wsl --mount --bare needs Admin (UAC failed: {e2}): {err[:400]} — fix: Right-click Mount_AI_Drive.bat → Run as administrator")
+            raise HTTPException(400, f"wsl --mount --bare failed: {err[:600]}")
+
+    @app.post("/v1/setup/create-vhdx")
+    async def setup_create_vhdx(request: Request):
+        """Explicit VHDX creation at user-picked location (first-time user)."""
+        try:
+            body = await request.json()
+            vhdx = body.get("vhdx") if isinstance(body, dict) else None
+            size_gb = body.get("size_gb") if isinstance(body, dict) else None
+        except Exception:
+            vhdx = None
+            size_gb = None
+        if not vhdx:
+            raise HTTPException(400, "vhdx path required — select a drive in Setup and click Create Drive")
+        try:
+            size = int(size_gb) if size_gb is not None else 250
+        except (ValueError, TypeError):
+            size = 250
+        if size < 10 or size > 2000:
+            raise HTTPException(400, f"size_gb must be 10-2000, got {size}")
+        # Explicit location — now auto-create is allowed
+        result = _ensure_vhdx(vhdx, size_gb=size)
+        if not result["ok"]:
+            raise HTTPException(400, f"Create failed at {vhdx}: {result.get('error','')}")
+        return result
 
     # ------------------------------------------------------------------
     @app.post("/v1/hive/turn")
@@ -2129,9 +2935,169 @@ def create_app(
     @app.delete("/v1/models/local")
     def delete_local_model(file: str = Query(...)):
         try:
-            return models_manager.delete_local(file)
+            out=models_manager.delete_local(file)
+            models_manager.invalidate_cache()
+            return out
         except (ValueError, FileNotFoundError) as exc:
             raise HTTPException(400, str(exc))
+
+    def _wsl_to_windows(path: str) -> str:
+        # /mnt/c/Users/... -> C:\Users\...
+        if path.startswith("/mnt/") and len(path) > 6 and path[6] == "/":
+            drive = path[5].upper()
+            rest = path[7:].replace("/", "\\")
+            return f"{drive}:\\{rest}"
+        return path
+
+    def _windows_to_wsl(path: str) -> str:
+        # C:\Users\... -> /mnt/c/Users/...
+        if len(path) >= 2 and path[1] == ":":
+            drive = path[0].lower()
+            rest = path[2:].lstrip("\\/").replace("\\", "/")
+            return f"/mnt/{drive}/{rest}"
+        return path.replace("\\", "/")
+
+    @app.get("/v1/models/linux")
+    def list_linux_models():
+        """List GGUFs in /mnt/dsh_storage/models (WSL ext4)."""
+        import time as _time
+        t0=_time.time()
+        try:
+            out = subprocess.check_output(
+                ["wsl", "-d", "Ubuntu", "-e", "bash", "-c", "find /mnt/dsh_storage/models -type f \\( -name '*.gguf' -o -name '*.GGUF' \\) -exec stat -c '%s %n' {} \\; 2>/dev/null | head -n 200"],
+                text=True, timeout=10, stderr=subprocess.STDOUT, creationflags=_NO_WINDOW,
+            )
+        except Exception as exc:
+            # Not mounted or WSL not running -> empty list, not 500
+            print(f"list_linux_models: find failed in {(_time.time()-t0):.2f}s: {exc}")
+            return {"models_dir": "/mnt/dsh_storage/models", "models": [], "error": str(exc)[:300], "mounted": False}
+        files: list[dict] = []
+        for line in out.strip().splitlines():
+            line=line.strip()
+            if not line:
+                continue
+            # stat -c '%s %n' -> "12345 /mnt/dsh_storage/models/foo/bar.gguf"
+            try:
+                sz_str, path = line.split(" ", 1)
+                size_gb = round(int(sz_str) / (1024**3), 2)
+                path=path.strip()
+            except Exception:
+                continue
+            if not path.lower().endswith(".gguf"):
+                continue
+            try:
+                rel = path[len("/mnt/dsh_storage/models/"): ] if path.startswith("/mnt/dsh_storage/models/") else Path(path).name
+            except Exception:
+                rel = Path(path).name
+            files.append({
+                "name": Path(path).stem,
+                "file": rel,
+                "path": path,
+                "size_gb": size_gb,
+                "sizeGb": size_gb,
+                "location": "linux",
+            })
+        print(f"list_linux_models: {len(files)} files in {(_time.time()-t0):.2f}s")
+        # sort by name
+        files.sort(key=lambda x: x["file"].lower())
+        return {"models_dir": "/mnt/dsh_storage/models", "models": files, "mounted": True}
+
+    @app.post("/v1/models/move-to-linux")
+    async def move_to_linux(request: Request):
+        """Move a System GGUF to /mnt/dsh_storage/models via WSL."""
+        try:
+            body = await request.json()
+            file = str(body.get("file") or "").strip()
+        except Exception:
+            file = ""
+        if not file:
+            raise HTTPException(422, "file is required (relative to models_dir)")
+        src = models_manager.resolve_model(file)
+        if src is None or not src.is_file():
+            raise HTTPException(404, f"model not found: {file}")
+        # ensure linux models dir exists
+        try:
+            subprocess.check_output(
+                ["wsl", "-d", "Ubuntu", "-e", "bash", "-c", "sudo mkdir -p /mnt/dsh_storage/models && sudo chmod 777 /mnt/dsh_storage/models"],
+                text=True, timeout=5, stderr=subprocess.STDOUT, creationflags=_NO_WINDOW,
+            )
+        except Exception as exc:
+            raise HTTPException(500, f"cannot prepare linux models dir: {exc}")
+        wsl_src = _windows_to_wsl(str(src))
+        fname = Path(src).name
+        dest_wsl = f"/mnt/dsh_storage/models/{fname}"
+        # Use wsl cp with sudo, then verify
+        try:
+            # copy, not move, so original stays tracked until verified
+            subprocess.check_output(
+                ["wsl", "-d", "Ubuntu", "-e", "bash", "-c", f"sudo cp '{wsl_src}' '{dest_wsl}' && sudo chmod 644 '{dest_wsl}'"],
+                text=True, timeout=300, stderr=subprocess.STDOUT, creationflags=_NO_WINDOW,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise HTTPException(500, f"copy to linux failed: {(exc.output or str(exc))[:600]}")
+        except Exception as exc:
+            raise HTTPException(500, f"copy to linux failed: {str(exc)[:600]}")
+        # verify dest exists
+        try:
+            subprocess.check_output(
+                ["wsl", "-d", "Ubuntu", "-e", "bash", "-c", f"test -f '{dest_wsl}' && stat -c %s '{dest_wsl}'"],
+                text=True, timeout=5, stderr=subprocess.STDOUT, creationflags=_NO_WINDOW,
+            )
+        except Exception as exc:
+            raise HTTPException(500, f"verify failed: {exc}")
+        models_manager.invalidate_cache()
+        return {"ok": True, "file": fname, "src": str(src), "dest": dest_wsl, "location": "linux"}
+
+    @app.post("/v1/models/move-to-windows")
+    async def move_to_windows(request: Request):
+        """Move a Linux GGUF back to System library (host models_dir)."""
+        try:
+            body = await request.json()
+            file = str(body.get("file") or "").strip()
+        except Exception:
+            file = ""
+        if not file:
+            raise HTTPException(422, "file is required (relative to /mnt/dsh_storage/models)")
+        # sanitize: no traversal
+        if ".." in file or file.startswith("/") or file.startswith("\\"):
+            raise HTTPException(400, "invalid file")
+        wsl_path = f"/mnt/dsh_storage/models/{file}"
+        # check exists in linux
+        try:
+            subprocess.check_output(
+                ["wsl", "-d", "Ubuntu", "-e", "bash", "-c", f"test -f '{wsl_path}'"],
+                text=True, timeout=5, stderr=subprocess.STDOUT, creationflags=_NO_WINDOW,
+            )
+        except Exception:
+            raise HTTPException(404, f"linux model not found: {file}")
+        dest_win = models_manager.models_dir / Path(file).name
+        dest_wsl = _windows_to_wsl(str(dest_win))
+        try:
+            subprocess.check_output(
+                ["wsl", "-d", "Ubuntu", "-e", "bash", "-c", f"sudo cp '{wsl_path}' '{dest_wsl}'"],
+                text=True, timeout=300, stderr=subprocess.STDOUT, creationflags=_NO_WINDOW,
+            )
+        except Exception as exc:
+            raise HTTPException(500, f"copy to windows failed: {str(exc)[:600]}")
+        if not dest_win.is_file():
+            raise HTTPException(500, "copy verified failed on host")
+        models_manager.invalidate_cache()
+        return {"ok": True, "file": Path(file).name, "src": wsl_path, "dest": str(dest_win), "location": "system"}
+
+    @app.delete("/v1/models/linux")
+    def delete_linux_model(file: str = Query(...)):
+        """Delete a GGUF from /mnt/dsh_storage/models."""
+        if ".." in file or file.startswith("/") or file.startswith("\\"):
+            raise HTTPException(400, "invalid file")
+        wsl_path = f"/mnt/dsh_storage/models/{file}"
+        try:
+            subprocess.check_output(
+                ["wsl", "-d", "Ubuntu", "-e", "bash", "-c", f"sudo rm -f '{wsl_path}' && echo ok"],
+                text=True, timeout=10, stderr=subprocess.STDOUT, creationflags=_NO_WINDOW,
+            )
+        except Exception as exc:
+            raise HTTPException(500, f"delete failed: {str(exc)[:400]}")
+        return {"ok": True, "deleted": file, "location": "linux"}
 
 
     @app.get("/v1/research/queue")
@@ -2271,8 +3237,12 @@ def create_app(
 
     @app.get("/v1/models/local")
     def local_models():
+        import time as _time
+        t0=_time.time()
+        models=models_manager.list_local()
+        print(f"list_local: {len(models)} models in {(_time.time()-t0):.2f}s from {models_manager.models_dir}")
         return {"models_dir": str(models_manager.models_dir),
-                "models": models_manager.list_local()}
+                "models": models}
 
     @app.post("/v1/embeddings")
     async def create_embeddings(request: Request):

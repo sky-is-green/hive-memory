@@ -51,8 +51,9 @@ _CSS = """
  .band-red { color: #b3372c; } .band-critical { color: #8a1f1f; font-weight: 700; }
  .st-pass { color: #157a3e; font-weight: 600; } .st-fail { color: #b3372c; font-weight: 600; }
  .st-skip { color: #9a6b00; } .st-report { color: #456; }
- .note { color: #5a6b7d; font-size: .85rem; }
- code { background: #eef2f6; padding: .1rem .35rem; border-radius: 4px; }
+ .note { color: #1c2733; font-size: .85rem; }
+ code { background: #000; color: #FFDD00; padding: .15rem .4rem; border-radius: 4px; border: 1px solid #222; }
+ .note code { background: #000; color: #FFDD00; border-color: #FFDD00; }
  ul.runs { list-style: none; padding: 0; } ul.runs li { margin: .35rem 0; }
 """
 
@@ -277,31 +278,64 @@ def render_server_page() -> str:
     hardcoded here."""
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"><meta http-equiv="Pragma" content="no-cache"><meta http-equiv="Expires" content="0"><title>Studio server &amp; models</title>
-<style>{_get_server_css()}</style></head><body>
-<div id="top-right-status" title="Launch status: whether a local model is loaded and healthy for the Launch section" style="position:absolute; top:1rem; right:1.2rem; background:#000; color:#FFDD00; border:2px solid #000; padding:.45rem .9rem; border-radius:8px; font-weight:700; font-size:.88rem; z-index:10; max-width:40vw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Launch: No model loaded</div>
+<style>{_get_server_css()}</style><style>input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{{-webkit-appearance:none;margin:0}}input[type=number]{{-moz-appearance:textfield;appearance:textfield}}</style></head><body>
+<div id="top-right-status" title="How: GET /v1/server/status hardware poll + process check. Does: Shows loaded model health. Changing: Green=ready, else Start needed." style="position:absolute; top:1rem; right:1.2rem; background:#000; color:#FFDD00; border:2px solid #000; padding:.45rem .9rem; border-radius:8px; font-weight:700; font-size:.88rem; z-index:10; max-width:40vw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Launch: No model loaded</div>
 <h1>Hive Studio console</h1>
-<p style="margin:.3rem 0"><button id="afkbtn" onclick="toggleAfk(this)" title="AFK mode: human away - QUEEN runs expanded autonomy (GREEN/YELLOW fixes, regen, HIVE-PLAN orders). Public pushes/merges/policy changes queue for return; RED defects contained and logged.">AFK</button> <a href="/runs"><button>Runs →</button></a> <a href="/docs"><button>API docs</button></a></p>
-<form style="display:inline" onsubmit="event.preventDefault(); return false"><input id="researchq" placeholder="deep-research question..." size="30" autocomplete="off" title="Queue a deep-research question for QUEEN; execution is master-only, reports land in RESEARCH/<slug>.md and are summarized on wake." onkeydown="if (event.key === &quot;Enter&quot;) researchAdd(this)"> <button id="researchsubmit" onclick="researchAdd(this)">Research</button> <span id="researchcount" class="meta" title="Queues a deep-research question for QUEEN. Execution is master-only; reports land in RESEARCH/&lt;slug&gt;.md and are summarized on wake."></span></form>
+<p style="margin:.3rem 0"><button id="afkbtn" onclick="toggleAfk(this)" title="How: toggleAfk sets HIVE-MODE.json. Does: QUEEN autonomy (GREEN/YELLOW auto, RED contained). Changing: On queues pushes/merges until return.">AFK</button> <a href="/runs"><button>Runs →</button></a> <a href="/docs"><button>API docs</button></a></p>
+<form style="display:inline" onsubmit="event.preventDefault(); return false"><input id="researchq" placeholder="deep-research question..." size="30" autocomplete="off" title="How: researchAdd queues to RESEARCH-QUEUE.md. Does: Deep research task (Queen only). Changing: Adds entry, not instant." onkeydown="if (event.key === &quot;Enter&quot;) researchAdd(this)"> <button id="researchsubmit" onclick="researchAdd(this)">Research</button> <span id="researchcount" class="meta" title="Queues a deep-research question for QUEEN. Execution is master-only; reports land in RESEARCH/&lt;slug&gt;.md and are summarized on wake."></span></form>
 
 <div class="grid">
 
 <!-- ==================== LEFT: tabs ==================== -->
 <div class="col">
 <div class="tabs">
-<button class="tab active" data-tab="tab-settings">Settings</button>
+<button class="tab" data-tab="tab-setup">Linux/Docker setup</button>
 <button class="tab" data-tab="tab-agent">Agent</button>
 <button class="tab" data-tab="tab-engines">Engines</button>
+<button class="tab" data-tab="tab-library">Local Library</button>
 <button class="tab" data-tab="tab-hive">Hive</button>
 <button class="tab" data-tab="tab-providers">Providers</button>
 <button class="tab" data-tab="tab-hub">Hub</button>
 <button class="tab" data-tab="tab-inspect">Inspector</button>
+<button class="tab active" data-tab="tab-settings">Settings</button>
 </div>
 
-<div id="tab-settings" class="tabpane">
+<div id="tab-setup" class="tabpane" style="display:none">
 <section>
-<h2 style="margin-top:0">Settings</h2>
-<div class="row"><label class="inline" title="Studio color scheme: light, dark, or follow system.">Theme  <select id="settings-theme" onchange="setTheme(this.value)"><option value="light">Light</option><option value="dark">Dark</option><option value="system">System</option></select></label></div>
-<div class="row"><span class="note">Engine profiles, model library, and provider settings are in their own tabs. This tab will hold general Studio preferences.</span></div>
+<h2 style="margin-top:0">Docker Setup — WebUI ↔ Linux model <span class="note">ROCm + VHDX bare</span></h2>
+<div class="note" style="margin-bottom:.6rem; line-height:1.5">For extra large models (DeepSeek v4 or similar). Your chat app sends prompts to a Linux AI server that loads the model from a virtual drive <code>E:/dsh_storage.vhdx</code> (shown as <code>/mnt/dsh_storage</code> inside Linux). <span title="How: WebUI OPENAI_API_BASE_URLS includes http://dsh-compute-backend:8000/v1 (hivebench-studio defaults :3000 → :8000); Docker runs custom-dsh-rocm-backend with /dev/kfd + HSA 11.0.0 + FLASH3 FP8 on /mnt/dsh_storage/models. Does: Serves large model with tiered spill 20 VRAM+24 RAM+NVMe. Changing: No user action — Bootstrap sets it up." style="background:#000;color:#FFDD00;padding:.2rem .5rem;border-radius:4px;border:1px dashed #FFDD00;cursor:help;font-weight:700;text-decoration:underline dotted">Hover for technical details.</span> One click does: expose drive → mount in Linux → start AI container → WebUI connects.</div>
+<div class="note" style="margin-bottom:.6rem;background:#000;color:#FFDD00;border:2px solid #FFDD00;padding:.6rem .8rem;border-radius:8px"><b>Easy Setup (first time: have WSL2 + Docker, no drive yet):</b> 1) Select <b>drive</b> + <b>size</b> → <b>Create Drive</b> (creates selected GB dynamic sparse, formats to ext4 on first mount — no auto-create, initially small) → 2) <b>Mount AI Drive (Admin)</b> → <b>Yes</b> on UAC → 3) <b>Bootstrap Docker</b> → 4) Add model to <code style="background:#1a1a00;color:#FFDD00;border:1px solid #FFDD00">/mnt/dsh_storage/models</code> (via WSL) → 5) <b>Verify:live</b> green = WebUI talks to Linux model</div>
+<div id="setup-box" style="background:#000; border:1.5px solid #FFB703; color:#FFDD00; border-radius:8px; padding:12px; display:grid; gap:8px; margin-top:.7rem">
+  <div style="grid-column:1 / -1; font-weight:700; color:#FFDD00; border-bottom:1px solid rgba(255,221,0,.18); padding-bottom:.35rem; margin-bottom:.2rem">Linux/Docker Setup</div>
+  <ul style="list-style:none; padding:0; margin:0; display:grid; gap:8px">
+    <li><div style="display:flex; gap:8px 10px; align-items:center"><div style="flex:0 0 160px; color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">Engine</div><div style="flex:1; color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem"><span class="note" style="color:#FFDD00">linux-rocm-docker (Docker)</span></div></div></li>
+    <li><div style="display:flex; gap:8px 10px; align-items:center"><div style="flex:0 0 160px; color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">Drive</div><div style="flex:1; color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem"><label class="inline" title="How: GET /v1/setup/drives lists >50GB drives with free/total. Does: Lets you pick drive for LLM Linux storage — VHDX updates to X:/dsh_storage.vhdx on change. Changing: Choose your LLM drive (e.g. E:) — no auto-best, you decide; needs Create Drive after."><select id="setup-drive"><option>auto-detecting…</option></select></label></div></div></li>
+    <li><div style="display:flex; gap:8px 10px; align-items:center"><div style="flex:0 0 160px; color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">VHDX</div><div style="flex:1; color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem"><label class="inline" title="How: String path sent as ?vhdx to _setup_health and as vhdx to create/mount/bootstrap; health won't auto-pick best. Does: Selects which VHDX every check targets (default E:/dsh_storage.vhdx). Changing: Edit to D:/dsh_storage.vhdx to use different drive — health shows vhdxExists for that path, bootstrap/bare will target it."><input id="setup-vhdx" size="22" placeholder="E:/dsh_storage.vhdx"></label></div></div></li>
+    <li><div style="display:flex; gap:8px 10px; align-items:center"><div style="flex:0 0 160px; color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">Size</div><div style="flex:1; color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem"><label class="inline" title="How: POST /v1/setup/create-vhdx size_gb. Does: Max size for the dynamic sparse VHDX (initially small, grows to this cap). Changing: Pick 50–1000; 250 is typical for a few 30B models."><select id="setup-vhdx-size"><option value="50">50GB</option><option value="100">100GB</option><option value="250" selected>250GB</option><option value="500">500GB</option><option value="1000">1000GB</option></select></label></div></div></li>
+    <li><div style="display:flex; gap:8px 10px; align-items:center"><div style="flex:0 0 160px; color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">Mount</div><div style="flex:1; color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem"><label class="inline" title="How: Display only — backend hardcodes /mnt/dsh_storage and docker compose mounts /mnt/dsh_storage/models:/workspace/models:ro. Does: Where WSL exposes VHDX ext4 for Docker. Changing: No effect — bootstrap always tries mkdir+mount /dev/sdd1/sdd/sde→/mnt/dsh_storage."><input id="setup-mount" size="16" placeholder="/mnt/dsh_storage"></label></div></div></li>
+    <li><div style="display:flex; gap:8px 10px; align-items:center"><div style="flex:0 0 160px; color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">Ready to run?</div><div style="flex:1; color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem"><span id="setup-msg" class="note" style="color:#FFDD00"></span></div></div></li>
+  </ul>
+  <div class="row" style="display:flex; gap:.35rem; flex-wrap:nowrap; padding:8px 0; border-top:1px solid rgba(255,221,0,.12); border-bottom:1px solid rgba(255,221,0,.12); margin:4px 0; overflow:hidden">
+    <button onclick="createDrive()" title="How: POST /v1/setup/create-vhdx {{vhdx, size_gb}} → _ensure_vhdx creates selected GB dynamic sparse (New-VHD→diskpart→fsutil) only when you click — no free-space pre-check, OS creates sparse file then formats to ext4. Does: Materialises VHDX at chosen path — no mount/docker. Changing: Must pick drive + size first; if exists returns already." style="flex:1 1 0; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:.78rem; padding:.3rem .35rem">Create Drive</button>
+    <button onclick="mountBare()" title="How: POST /v1/setup/mount-bare vhdx → wsl --mount --vhd {{vhdx}} --bare, checks sdd/sde already. Does: Exposes VHDX as bare block to WSL (no filesystem). Changing: Needs Admin — pops UAC (powershell Start-Process -Verb RunAs); if no vhdx auto-create disabled → 400 need Create Drive first." style="flex:1 1 0; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:.78rem; padding:.3rem .35rem">Mount AI Drive</button>
+    <button onclick="bootstrapDocker()" title="How: POST /v1/setup/bootstrap → checks VHDX exists (fail 400 need Create Drive), bare sdd/sde exists (fail 400 need Mount Admin), mkdir+mount /dev/sdd1→/mnt/dsh_storage, docker compose up dsh-compute-backend (auto-tags server-rocm if missing) + checks /dev/kfd. Does: Mounts ext4 and starts Docker (no Admin). Changing: 400 if not bare/mounted; 500 if /dev/kfd missing → wsl --update + AMD driver." style="flex:1 1 0; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:.78rem; padding:.3rem .35rem">Bootstrap Docker</button>
+    <button onclick="refreshStatus()" title="How: GET /v1/setup/status → health grid + Ready + tier, then harness GET /v1/setup/docker-models (proxies 8000/v1/models, no CORS) + fetch :3000 no-cors (merged Test). Does: Health + Verify:live + Docker/WebUI in one click. Changing: One click updates all." style="flex:1 1 0; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:.78rem; padding:.3rem .35rem">Refresh Status</button>
+  </div>
+  <div id="setup-health" style="display:grid; gridTemplateColumns:160px 1fr; gap:8px 10px; border-top:1px solid rgba(255,221,0,.18); padding-top:8px; margin-top:4px"></div>
+</div>
+<details style="display:none"><summary>Docker details (compose + logs) — now in console (F12)</summary>
+<pre id="setup-docker" style="max-height:180px;overflow:auto; display:none">click Refresh to load</pre>
+<div class="row" style="gap:.4rem;flex-wrap:wrap;margin-top:.4rem; display:none"><code>wsl --mount --vhd E:/dsh_storage.vhdx --bare</code> → <code>mount /dev/sdX1 /mnt/dsh_storage</code> → <code>docker compose up -d dsh-compute-backend</code> → <code>curl http://127.0.0.1:8000/health</code></div>
+<div class="note" style="display:none">Compose: <code>dsh-compute-backend:8000</code> <code>/dev/kfd:/dev/kfd</code> <code>/dev/dri:/dev/dri</code> <code>seccomp:unconfined</code> <code>group_add video/render</code> <code>/mnt/dsh_storage/models:/workspace/models:ro</code> <code>OPENAI_API_BASE_URLS=http://dsh-compute-backend:8000/v1</code></div>
+</details>
+<div id="setup-tier" class="kv-grid" style="margin-top:.6rem"></div>
+<div class="row" style="gap:.6rem;margin-top:.5rem; flex-wrap:wrap">
+  <label class="inline">context <select id="setup-ctx" onchange="refreshStatus()"><option value="32768">32k</option><option value="131072">131k (dual)</option><option value="128000">128k</option><option value="1000000">1M</option></select></label>
+  <label class="inline"><input id="setup-dual" type="checkbox" onchange="refreshStatus()"> dual 2× GPU</label>
+  <span class="note">FP8 KV 0.07/1024 · spill to NVMe · cap from leftover</span>
+</div>
+<pre id="setup-raw" style="max-height:160px;overflow:auto;display:none"></pre>
+<div class="note" style="margin-top:.5rem">Docker <code>GET /health</code> + <code>/v1/models</code> must be 200 for WebUI <code>:3000</code> to list Linux model. VHDX bare bypasses 9P.</div>
 </section>
 </div>
 
@@ -321,15 +355,15 @@ def render_server_page() -> str:
 <form id="engine-profile-form" class="engine-grid" onsubmit="event.preventDefault(); saveEngineProfile();">
   <div class="row" style="gap:.6rem; flex-wrap:wrap">
     <select id="eng-select" style="min-width:180px" onchange="engineSelected()"></select>
-    <label class="inline" title="Profile applied when a conversation names no engine.">default  <input id="eng-default" type="checkbox" onchange="engDirty=true"></label>
+    <label class="inline" title="How: Stored via POST /v1/engines default:true, resolved when engine param missing. Does: Default for new conversations. Changing: Check to make this fallback — only one active, persisted to engines.local.json.">default  <input id="eng-default" type="checkbox" onchange="engDirty=true"></label>
     <button type="button" onclick="engineAdd()">+ Add</button>
   </div>
 
   <!-- Model -->
   <div class="engine-group">
-    <h3 title="Local GGUF model — dropdown populated from the local library">Model </h3>
+    <h3 title="How: GET /v1/models/local lists GGUFs from models_dir; resolve checks file else needs hf. Does: Sets weights for -m (size_gb for fit). Changing: Pick different GGUF changes VRAM need — Save+Load to restart.">Model </h3>
     <div class="grid-2col">
-      <label title="Local GGUF from library — dropdown populated from /v1/models/local">Model  <select id="eng-model" onchange="engDirty=true; updateFit();"><option value="">— choose local model —</option></select></label>
+      <label title="How: GET /v1/models/local scans models_dir. Does: Selects GGUF for -m (advisory, on Start). Changing: Different file → different size_gb/KV fit — Save+Load required.">Model  <select id="eng-model" onchange="engDirty=true; updateFit();"><option value="">— choose local model —</option></select></label>
       <span class="note">Selected: <b id="eng-model-display">—</b> <span id="eng-model-note" class="note" style="margin-left:.5rem"></span></span>
     </div>
   </div>
@@ -338,10 +372,10 @@ def render_server_page() -> str:
   <div class="engine-group">
     <h3>Endpoint</h3>
     <div class="grid-2col">
-      <label title="Display name of this engine profile.">name  <input id="eng-name" size="16" placeholder="local-bonsai" oninput="engDirty=true"></label>
-      <label title="Human name for this profile">displayName  <input id="eng-displayName" placeholder="local-bonsai" oninput="engDirty=true"></label>
-      <label title="OpenAI-compatible endpoint root, e.g. http://localhost:1234/v1">baseURL  <input id="eng-url" placeholder="http://localhost:1234/v1" oninput="engDirty=true"></label>
-      <label title="Bearer token; leave blank for none">apiKey  <input id="eng-apikey" type="password" placeholder="(none)" oninput="engDirty=true"></label>
+      <label title="How: Required EngineProfile.name, validated non-empty, key for registry.resolve. Does: Lookup for provider/engine param. Changing: Rename breaks saved refs.">name  <input id="eng-name" size="16" placeholder="local-bonsai" oninput="engDirty=true"></label>
+      <label title="How: UI alias not in profile. Does: Cosmetic picker label. Changing: No backend effect.">displayName  <input id="eng-displayName" placeholder="local-bonsai" oninput="engDirty=true"></label>
+      <label title="How: Provider base_url → resolve_endpoint → POST /v1/chat/completions. Does: Routes generation. Changing: Wrong URL→502; 1234 vs 1236 hits different ServerInstance.">baseURL  <input id="eng-url" placeholder="http://localhost:1234/v1" oninput="engDirty=true"></label>
+      <label title="How: api_key → Bearer, redacted as ***; blank→lm-studio. Does: Auth only. Changing: Needed for hosted, blank fine for local.">apiKey  <input id="eng-apikey" type="password" placeholder="(none)" oninput="engDirty=true"></label>
     </div>
   </div>
 
@@ -349,7 +383,7 @@ def render_server_page() -> str:
   <div class="engine-group">
     <h3>Context</h3>
     <div class="grid-2col">
-      <label title="Context window tokens">contextLength  <input id="eng-ctxlen" type="number" value="8192" min="256" step="256" oninput="engDirty=true; updateFit();"></label>
+      <label title="How: ctx_size → -c (8192 default), fit needs=size+ctx*0.25GB/1k. Does: Caps prompt+completion, KV cost. Changing: 8k→32k +6GB spill→NVMe/oom; >16k Auto forces q8_0.">contextLength  <input id="eng-ctxlen" type="number" value="8192" min="256" step="256" oninput="engDirty=true; updateFit();"></label>
       <div id="eng-fit" class="fit-panel" style="display:block">
         <div class="fit-grid">
           <span id="fit-needs" class="fit-needs">needs —</span>
@@ -358,7 +392,7 @@ def render_server_page() -> str:
         </div>
         <div class="fit-bar"><div id="fit-fill" class="fit-fill" style="width:0%"></div></div>
         <div class="row fit-controls">
-          <label class="inline">context <input id="fit-ctx" type="range" min="2048" max="131072" step="1024" value="8192"> <span id="fit-ctx-label" title="VRAM estimate: model file + KV cache (≈0.25GB per 1k tokens for 7B q4). 32k → 12GB total for a 4GB model.">8k</span> → <b id="fit-needs-val">—</b> </label>
+          <label class="inline">context <input id="fit-ctx" type="range" min="2048" max="131072" step="1024" value="8192"> <span id="fit-ctx-label" title="How: fit needs vs hardware via /v1/server/status. Does: Visual guide, disables Load if needs>has. Changing: Slider only visual — Auto/Save commits.">8k</span> → <b id="fit-needs-val">—</b> </label>
           <button type="button" id="eng-load-fit" onclick="engineLoadFromFit()" disabled>Load</button>
         </div>
       </div>
@@ -369,14 +403,14 @@ def render_server_page() -> str:
   <div class="engine-group">
     <h3>Sampling</h3>
     <div class="grid-2col sampling-grid">
-      <label title="Randomness: higher = more varied, lower = more focused.">temp  <input id="s-temp" type="number" step="0.05" min="0" max="2" oninput="engDirty=true"></label>
-      <label title="Nucleus sampling: keep only tokens covering this cumulative probability.">top_p  <input id="s-topp" type="number" step="0.05" min="0" max="1" oninput="engDirty=true"></label>
-      <label title="Sample only from the K most likely tokens.">top_k  <input id="s-topk" type="number" oninput="engDirty=true"></label>
-      <label title="Drop tokens below this fraction of the top token probability.">min_p  <input id="s-minp" type="number" step="0.01" oninput="engDirty=true"></label>
-      <label title="Penalty on tokens already present; higher = less repetition.">repeat_penalty  <input id="s-rep" type="number" step="0.05" oninput="engDirty=true"></label>
-      <label title="Flat penalty once a token appears at all.">presence_penalty  <input id="s-pres" type="number" step="0.1" oninput="engDirty=true"></label>
-      <label title="Penalty that grows with each repetition of a token.">frequency_penalty  <input id="s-freq" type="number" step="0.1" oninput="engDirty=true"></label>
-      <label title="Fixed RNG seed for reproducible output; blank = random.">seed  <input id="s-seed" type="number" oninput="engDirty=true"></label>
+      <label title="How: payload.temperature 0..2 via sampling, no range check. Does: Logit scale. Changing: 0.2→1.2 more creative/hallucination; 0 deterministic.">temp  <input id="s-temp" type="number" step="0.05" min="0" max="2" oninput="engDirty=true"></label>
+      <label title="How: payload.top_p 0..1. Does: Nucleus mass cut. Changing: 1→0.7 tighter, less tail.">top_p  <input id="s-topp" type="number" step="0.05" min="0" max="1" oninput="engDirty=true"></label>
+      <label title="How: payload.top_k int. Does: Keep K most likely. Changing: 0→40 prunes weird tokens.">top_k  <input id="s-topk" type="number" oninput="engDirty=true"></label>
+      <label title="How: payload.min_p 0..1. Does: Drop <fraction*top. Changing: 0.05 prunes low prob without top_p.">min_p  <input id="s-minp" type="number" step="0.01" oninput="engDirty=true"></label>
+      <label title="How: repeat_penalty via llama.cpp. Does: Penalise present. Changing: 1.0→1.2 less looping.">repeat_penalty  <input id="s-rep" type="number" step="0.05" oninput="engDirty=true"></label>
+      <label title="How: presence_penalty OpenAI. Does: Once-per-token. Changing: 0→0.6 broader explore.">presence_penalty  <input id="s-pres" type="number" step="0.1" oninput="engDirty=true"></label>
+      <label title="How: frequency_penalty growing. Does: Per-repeat. Changing: 0→0.5 curbs loops.">frequency_penalty  <input id="s-freq" type="number" step="0.1" oninput="engDirty=true"></label>
+      <label title="How: payload.seed int, blank random. Does: Reproducible. Changing: Fixed → same output.">seed  <input id="s-seed" type="number" oninput="engDirty=true"></label>
     </div>
   </div>
 
@@ -384,14 +418,14 @@ def render_server_page() -> str:
   <div class="engine-group">
     <h3>Load</h3>
     <div class="grid-2col load-grid">
-      <label title="CPU threads for inference; blank = automatic.">threads  <input id="eng-threads" type="number" placeholder="auto" oninput="engDirty=true"></label>
-      <label title="Model layers offloaded to the GPU. 999 = every layer">gpu_layers  <input id="eng-gpu" type="number" value="999" oninput="engDirty=true"></label>
-      <label title="FlashAttention kernels: faster attention and lower VRAM at long context.">flash_attn  <select id="eng-flash" onchange="engDirty=true"><option value="">off</option><option value="on">on</option><option value="auto">auto</option></select></label>
-      <label title="Requests decoded concurrently; each slot shares the context window.">parallel  <input id="eng-parallel" type="number" placeholder="1" oninput="engDirty=true"></label>
-      <label title="Logical prompt-processing batch size.">batch  <input id="eng-batch" type="number" placeholder="512" oninput="engDirty=true"></label>
-      <label title="Physical micro-batch fed to the model per step.">ubatch  <input id="eng-ubatch" type="number" placeholder="512" oninput="engDirty=true"></label>
-      <label title="Quantize the attention key cache to save VRAM">cache K  <select id="eng-ctk" onchange="engDirty=true"><option value="">f16</option><option>q8_0</option><option>q4_0</option></select></label>
-      <label title="Same quantization for the value cache.">cache V  <select id="eng-ctv" onchange="engDirty=true"><option value="">f16</option><option>q8_0</option><option>q4_0</option></select></label>
+      <label title="How: -t <n> or omit auto. Does: CPU parallelism. Changing: 4→16 up tok/s, over→down.">threads  <input id="eng-threads" type="number" placeholder="auto" oninput="engDirty=true"></label>
+      <label title="How: -ngl <n> 999=all, clamped to est_layers. Does: GPU VRAM linear. Changing: 999→28 on 8GB fits but slower; 999 oom→exit.">gpu_layers  <input id="eng-gpu" type="number" value="999" oninput="engDirty=true"></label>
+      <label title="How: -fa on if set, auto on when ctx>=8192. Does: Faster long ctx. Changing: off→on +10-30% at 32k, needs GPU.">flash_attn  <select id="eng-flash" onchange="engDirty=true"><option value="">off</option><option value="on">on</option><option value="auto">auto</option></select></label>
+      <label title="How: -np <n> parallel slots. Does: Concurrent decode, ctx/slots. Changing: 1→4 throughput up, per-slot ctx down.">parallel  <input id="eng-parallel" type="number" placeholder="1" oninput="engDirty=true"></label>
+      <label title="How: -b <n> 512 default. Does: Tokens/step RAM. Changing: 512→2048 prompt faster, more VRAM/spill.">batch  <input id="eng-batch" type="number" placeholder="512" oninput="engDirty=true"></label>
+      <label title="How: -ub <n> 512. Does: Micro-batch physically. Changing: 512→128 lower peak but more steps; tune with batch.">ubatch  <input id="eng-ubatch" type="number" placeholder="512" oninput="engDirty=true"></label>
+      <label title="How: --cache-type-k q8_0/q4_0 else f16, Auto q8_0 if ctx>16384. Does: KV quant saves 50%/75%. Changing: f16→q8 halves KV.">cache K  <select id="eng-ctk" onchange="engDirty=true"><option value="">f16</option><option>q8_0</option><option>q4_0</option></select></label>
+      <label title="How: --cache-type-v same. Does: V cache quant. Changing: Same as K.">cache V  <select id="eng-ctv" onchange="engDirty=true"><option value="">f16</option><option>q8_0</option><option>q4_0</option></select></label>
     </div>
   </div>
 
@@ -399,12 +433,12 @@ def render_server_page() -> str:
   <div class="engine-group">
     <h3>Advanced</h3>
     <div class="grid-2col advanced-grid">
-      <label title="Adaptive perplexity control: 0 = off, 1 = v1, 2 = v2.">mirostat  <input id="s-miro" type="number" min="0" max="2" oninput="engDirty=true"></label>
-      <label title="Mirostat target entropy: higher = more surprising text.">mirostat_tau  <input id="s-tau" type="number" step="0.1" oninput="engDirty=true"></label>
-      <label title="How fast mirostat adapts toward its target.">mirostat_eta  <input id="s-eta" type="number" step="0.01" oninput="engDirty=true"></label>
-      <label title="Comma-separated strings that end generation early.">stop  <input id="s-stop" placeholder="a,b" oninput="engDirty=true"></label>
-      <label title="Model id exposed on /v1/models instead of the file path.">alias  <input id="eng-alias" placeholder="model id" oninput="engDirty=true"></label>
-      <label title="Backend family the harness talks to.">kind  <select id="eng-kind" onchange="engDirty=true"><option>llama_cpp</option><option>lmstudio</option><option>vllm</option><option>ollama</option><option>hosted</option></select></label>
+      <label title="How: mirostat 0..2 payload. Does: Perplexity target. Changing: 0 off →2 adaptive.">mirostat  <input id="s-miro" type="number" min="0" max="2" oninput="engDirty=true"></label>
+      <label title="How: mirostat_tau float. Does: Entropy target. Changing: Higher more surprise.">mirostat_tau  <input id="s-tau" type="number" step="0.1" oninput="engDirty=true"></label>
+      <label title="How: mirostat_eta float. Does: Adapt rate. Changing: 0.1 fast vs 0.01 slow.">mirostat_eta  <input id="s-eta" type="number" step="0.01" oninput="engDirty=true"></label>
+      <label title="How: stop array payload. Does: Early stop. Changing: Add </s> to truncate.">stop  <input id="s-stop" placeholder="a,b" oninput="engDirty=true"></label>
+      <label title="How: --alias <id>. Does: Model id vs path. Changing: Clients see alias.">alias  <input id="eng-alias" placeholder="model id" oninput="engDirty=true"></label>
+      <label title="How: kind in llama_cpp,lmstudio,vllm,ollama,hosted validated. Does: Routing hint. Changing: Wrong→422; hosted skips launch.">kind  <select id="eng-kind" onchange="engDirty=true"><option>llama_cpp</option><option>lmstudio</option><option>vllm</option><option>ollama</option><option>hosted</option></select></label>
     </div>
   </div>
 
@@ -412,9 +446,9 @@ def render_server_page() -> str:
   <div class="engine-group" id="ab-compare">
     <h3>A/B compare</h3>
     <div class="grid-2col">
-      <label title="First engine profile to compare">A profile  <select id="ab-select-a"></select></label>
-      <label title="Second engine profile to compare">B profile  <select id="ab-select-b"></select></label>
-      <label title="Base port for A (B runs on basePort+1)">basePort  <input id="ab-baseport" type="number" value="1234" min="1024" max="65534"></label>
+      <label title="How: POST /v1/engines/ab/bench profile_a,basePort reuses or loads. Does: Bench A vs B. Changing: Pick different to compare tok/s.">A profile  <select id="ab-select-a"></select></label>
+      <label title="How: Second on basePort+1. Does: Bench vs A. Changing: Determines B load.">B profile  <select id="ab-select-b"></select></label>
+      <label title="How: basePort 1024-65534, B=basePort+1 via _ab_ensure_started. Does: Ports for AB. Changing: 1234→5678 avoids clash.">basePort  <input id="ab-baseport" type="number" value="1234" min="1024" max="65534"></label>
       <div class="row" style="gap:.5rem; align-items:center">
         <button type="button" id="ab-bench-btn" onclick="benchAb()">Bench</button>
         <span id="ab-winner" class="winner-badge">—</span>
@@ -428,16 +462,33 @@ def render_server_page() -> str:
     </div>
   </div>
 
-  <div class="row" style="margin-top:.6rem; gap:.5rem; align-items:center; flex-wrap:wrap"><span id="eng-msg" class="note"></span><button type="submit" id="eng-save">Save</button> <button type="button" id="eng-auto" onclick="engineAuto()" title="Auto-set GPU layers & context from hardware + model size">Auto</button> <span id="eng-auto-msg" class="note" style="margin-left:.5rem"></span> <button type="button" onclick="exportEngineProfiles()">Export</button><button type="button" onclick="document.getElementById('import-engine-profiles').click()">Import</button><input type="file" id="import-engine-profiles" accept=".json" style="display:none" onchange="importEngineProfiles(this)"><span id="import-export-msg" class="note"></span></div>
+  <div class="row" style="margin-top:.6rem; gap:.5rem; align-items:center; flex-wrap:wrap"><span id="eng-msg" class="note"></span><button type="submit" id="eng-save">Save</button> <button type="button" id="eng-auto" onclick="engineAuto()" title="How: GET /v1/engines/preset → _auto_preset size_gb+hardware table + est_layers, writes load_options. Does: Sets gpu/context/flash/cache. Changing: Click to fit model to VRAM (e.g. 32b 8GB→12/4k, 4b 8GB→999/32k).">Auto</button> <span id="eng-auto-msg" class="note" style="margin-left:.5rem"></span> <button type="button" onclick="exportEngineProfiles()">Export</button><button type="button" onclick="document.getElementById('import-engine-profiles').click()">Import</button><input type="file" id="import-engine-profiles" accept=".json" style="display:none" onchange="importEngineProfiles(this)"><span id="import-export-msg" class="note"></span></div>
   <pre id="eng-loadopts" style="display:none"></pre>
 </form>
 </section>
+</div>
 
+<div id="tab-library" class="tabpane" style="display:none">
 <section>
-<h2 style="margin-top:0">Local library <span class="note" id="library-path-note"></span></h2>
-<div class="row"><input type="text" id="library-path" placeholder="C:/Users/you/.lmstudio/models" size="38" style="flex:1" title="Local folder holding GGUF files. Change to your LM Studio models folder or HF download dir; persists to harness_state/models_dir.txt."> <button onclick="setLibraryPath()">Use this folder</button><span id="import-status" class="note" style="margin-left:.5rem"></span></div>
-<div class="row" style="margin-top:.6rem"><input type="text" id="library-filter" placeholder="Filter by name…" size="28" style="flex:1" oninput="filterLibrary()" title="Filter the local library list and model dropdowns by filename; shows visible/total count."> <span class="note" id="library-filter-count" style="margin-left:.5rem"></span></div>
-<div id="local" class="liblist">loading…</div>
+<h2 style="margin-top:0">Local Library</h2>
+<div class="lib-container">
+<div class="tabs" style="margin-bottom:.6rem">
+<div class="lib-tab active" data-rtab="lib-system" onclick="switchLibraryTab('lib-system', event)" role="button" tabindex="0">System</div>
+<div class="lib-tab" data-rtab="lib-linux" onclick="switchLibraryTab('lib-linux', event)" role="button" tabindex="0">Linux / Docker</div>
+</div>
+<div id="lib-system" class="lib-tabpane">
+<div class="note" style="color:#000">System models on Windows host (<span id="library-path-note"></span>) — right-click to move to Linux</div>
+<div class="row"><input type="text" id="library-path" placeholder="C:/Users/you/.lmstudio/models" size="38" style="flex:1" title="How: POST /v1/models/local/path writes to harness_state/models_dir.txt, list_local scans there. Does: Sets local library root for GGUF dropdowns. Changing: Point to LM Studio folder to see your models; persists across restarts."> <button onclick="setLibraryPath()">Use this folder</button><span id="import-status" class="note" style="margin-left:.5rem; color:#000"></span></div>
+<div class="row" style="margin-top:.6rem"><input type="text" id="library-filter" placeholder="Filter by name…" size="28" style="flex:1" oninput="filterLibrary()" title="How: Client filterLibrary() substring on filenames. Does: Filters list + dropdown options, shows visible/total. Changing: Type qwen to narrow; clear to show all."> <span class="note" id="library-filter-count" style="margin-left:.5rem; color:#000"></span></div>
+<div id="local-system" class="liblist">loading…</div>
+<div id="local" style="display:none"></div>
+</div>
+<div id="lib-linux" class="lib-tabpane" style="display:none; margin-top:.8rem; border-top:1.5px solid #000; padding-top:.6rem">
+<h3 style="margin:.2rem 0 .4rem; color:#000">Linux / Docker — <code>/mnt/dsh_storage/models</code></h3>
+<div class="note" style="color:#000">Right-click to send back to Windows or delete</div>
+<div id="local-linux" class="liblist">loading…</div>
+</div>
+</div>
 </section>
 </div>
 
@@ -447,32 +498,32 @@ def render_server_page() -> str:
 <div class="note">Applied when a conversation is created — hit
 "New conversation" in the chat pane after changing.</div>
 <div class="row">
-<label class="inline" title="Token ceiling for the prompt the hive assembles each turn.">max_context  <input id="h-maxctx" type="number" size="6"></label>
-<label class="inline" title="Hard cap on generated tokens per reply.">max_tokens  <input id="h-maxtok" type="number" size="5" placeholder="4096 ceiling"></label>
+<label class="inline" title="How: HiveConfig.max_context (8192 default) caps assembly.py focal budget vs drone budget (1-6k). Does: Token ceiling for curated prompt. Changing: Up → more chunks fit but higher token_count/latency; down → truncates even high-relevance facts.">max_context  <input id="h-maxctx" type="number" size="6"></label>
+<label class="inline" title="How: HiveConfig.max_tokens (None=backend default) → sampling max_tokens via app:1379/stream. Does: Caps reply length. Changing: Up longer answers; down ≤256 on reasoning models → empty_reply_reasoning_starved.">max_tokens  <input id="h-maxtok" type="number" size="5" placeholder="4096 ceiling"></label>
 </div>
 <div class="row">
-<label class="inline" title="Turns a fact may sit unreferenced before it ages out of the store.">stale wall  <input id="h-stale" type="number" size="3"></label>
-<label class="inline" title="Similarity above which new text counts as a duplicate and is not stored again.">dedup  <input id="h-dedup" type="number" step="0.01" size="4"></label>
-<label class="inline" title="Similarity drop between turns that marks a topic change.">drift  <input id="h-drift" type="number" step="0.05" size="4"></label>
-<label class="inline" title="Recall threshold: how similar content must be to resurface from memory.">remem  <input id="h-remem" type="number" step="0.05" size="4"></label>
+<label class="inline" title="How: stale_threshold 20 → decay.py age>20 *0.5 and archive to comb. Does: Stale penalty + archiving gate. Changing: Up zombies linger; down faster forgetting, comb sooner, cleaner but lose mid-horizon.">stale wall  <input id="h-stale" type="number" size="3"></label>
+<label class="inline" title="How: dedup_threshold 0.92 → ContextDeduplicator cosine>0.92 keeps denser info. Does: Filters duplicates pre-scoring. Changing: 0.98 keeps near-variants; 0.85 aggressively merges distinct facts.">dedup  <input id="h-dedup" type="number" step="0.01" size="4"></label>
+<label class="inline" title="How: drift_threshold 0.6 → TopicDriftDetector 1-cosine(recent,history)>0.6 penalises old topics *0.1. Does: Detects shift. Changing: Up less sensitive (stale surfaces); down isolates recent but hurts cross-topic.">drift  <input id="h-drift" type="number" step="0.05" size="4"></label>
+<label class="inline" title="How: remembrance_threshold 0.65 (currently unwired — RemembrancePass hardcoded). Does: Would save at deletion if relevant. Changing: No effect until wired; lower would save more, higher fewer.">remem  <input id="h-remem" type="number" step="0.05" size="4"></label>
 </div>
 <div class="row">
-<label class="inline" title="Bonus added to relevance scores on exact keyword hits.">vocab boost  <input id="h-vocab" type="number" step="0.05" size="4"></label>
-<label class="inline" title="How the drone estimates its own certainty; mcdropout uses multiple stochastic passes.">confidence  <select id="h-conf">
+<label class="inline" title="How: vocab_boost 0.15 via UltraSmallDrone vocab match. Does: Keyword bonus on cosine. Changing: Up domain terms dominate; 0 pure semantic may miss code.">vocab boost  <input id="h-vocab" type="number" step="0.05" size="4"></label>
+<label class="inline" title="How: confidence off/single/mcdropout via ultra_small 1 vs 3 passes (std). Does: Drives escalation to medium. Changing: off no escalation fastest; mcdropout enables medium re-score but 3× encode, needs medium drone for effect.">confidence  <select id="h-conf">
 <option>off</option><option>single</option><option>mcdropout</option></select></label>
 </div>
 <div class="row">
-<label class="inline"><input id="h-sanitize" type="checkbox" title="Security scrub of the assembled context before it reaches the model."> sanitize context </label>
-<label class="inline"><input id="h-hedge" type="checkbox" title="Never store refusal/hedge replies; they pollute the store and resurface as bad context."> filter hedge replies </label>
-<label class="inline"><input id="h-medium" type="checkbox" title="Second-pass encoder for harder queries: better recall, heavier and VRAM-hungry."> medium drone </label>
+<label class="inline"><input id="h-sanitize" type="checkbox" title="How: sanitize_context True → sanitize.py wraps <user_data> + neutralises ignore/system prompts. Does: Prevents injection. Changing: Off raw chunks to LLM (risk); on may alter legit code mentioning system:."> sanitize context </label>
+<label class="inline"><input id="h-hedge" type="checkbox" title="How: filter_hedge True → hedges.py 90ch lead-anchored drops before add_chunk (also curate/observe). Does: Drops ~50% refusals. Changing: Off stores hedges → later retrieved loops; on may drop edge factual hedges."> filter hedge replies </label>
+<label class="inline"><input id="h-medium" type="checkbox" title="How: enable_medium False → MediumDrone graphcodebert 400MB vs stub 0.5. Does: Second-pass for score>=2 complex. Changing: On better recall +20-50ms, VRAM heavy; off ultra only."> medium drone </label>
 </div>
 <details><summary>Comb (P11 surplus tier)</summary>
 <div class="row">
-<label class="inline"><input id="h-comb" type="checkbox" title="Freeze evicted chunks to disk so old topics can be resurrected later (P11)."> enabled </label>
-<label class="inline" title="Archived candidates allowed to compete for context each turn.">top_k  <input id="h-combk" type="number" size="3"></label>
-<label class="inline" title="Comb is consulted only when the store scores below this; normal turns pay nothing.">gate  <input id="h-combgate" type="number" step="0.05" size="4"></label>
-<label class="inline" title="Cap on archived records kept on disk.">max records  <input id="h-combmax" type="number" size="5"></label>
-<label class="inline"><input id="h-combrel" type="checkbox" title="Archive only chunks the hive previously selected as relevant."> curated-only </label>
+<label class="inline"><input id="h-comb" type="checkbox" title="How: comb_enabled False → CombStore JSONL at harness_comb, evicted not deleted. Does: Surplus tier for returns. Changing: On long-horizon recall, forces comb_dir set."> enabled </label>
+<label class="inline" title="How: comb_top_k 5 → comb.retrieve k lexically ranked. Does: Competes vs store. Changing: Up more resurrect candidates but budget competition; down fewer faster.">top_k  <input id="h-combk" type="number" size="3"></label>
+<label class="inline" title="How: comb_gate 0.85 → fires when top_raw<0.85 or echo. Does: Gate decides comb consult (~820ms). Changing: 0.70 fires often crowding; 0.95 rarely misses returns.">gate  <input id="h-combgate" type="number" step="0.05" size="4"></label>
+<label class="inline" title="How: comb_max_records 2000 → prune LRU cap + 1000 turn prune. Does: Disk cap. Changing: Up longer horizon but disk; down sooner forgetting.">max records  <input id="h-combmax" type="number" size="5"></label>
+<label class="inline"><input id="h-combrel" type="checkbox" title="How: comb_relevant_only True → archive only once_curated (relevance_history). Does: Lean archive. Changing: Off archives every evicted (more noise/recall)."> curated-only </label>
 </div>
 </details>
 <div class="row"><span id="hive-msg" class="note"></span>
@@ -501,13 +552,13 @@ providers.local.json (gitignored).</div>
 <div id="tab-hub" class="tabpane" style="display:none">
 <section>
 <h2 style="margin-top:0">Hugging Face hub <span class="note">(live)</span></h2>
-<div class="row"><span class="sugwrap" style="width:100%"><input id="q" placeholder="search gguf repos…" style="width:100%" title="Live search Hugging Face Hub for GGUF repos; typeahead after 2 chars, 8 results with download counts.">
+<div class="row"><span class="sugwrap" style="width:100%"><input id="q" placeholder="search gguf repos…" style="width:100%" title="How: GET /v1/models/hub?q=2+chars → HF API 8 results. Does: Live search repos. Changing: Type to get suggestions; click to fill repo field.">
 <div class="sugbox" id="sug-q"></div></span></div>
 <datalist id="repo-suggestions"></datalist>
 <pre id="hub">(search above)</pre>
-<div class="row"><span class="sugwrap" style="width:100%"><input id="drepo" placeholder="repo id (type for suggestions)" style="width:100%" title="Target Hugging Face repo id; type for suggestions from live search.">
+<div class="row"><span class="sugwrap" style="width:100%"><input id="drepo" placeholder="repo id (type for suggestions)" style="width:100%" title="How: Input for --hf-repo, suggestions from hub search. Does: Sets HF repo for download/start. Changing: Different repo → different weights; needs exact file next.">
 <div class="sugbox" id="sug-drepo"></div></span><br>
-<input id="dfile" placeholder="file.gguf" size="24" title="Exact GGUF filename inside that repo (copy it from the search results).">
+<input id="dfile" placeholder="file.gguf" size="24" title="How: Value for --hf-file exact filename. Does: Picks file inside repo. Changing: Wrong name → 400 not found; copy from search.">
 <button onclick="download(this)">Download</button></div>
 <pre id="downloads"></pre>
 </section>
@@ -528,6 +579,14 @@ providers.local.json (gitignored).</div>
 </section>
 </div>
 
+<div id="tab-settings" class="tabpane">
+<section>
+<h2 style="margin-top:0">Settings</h2>
+<div class="row"><label class="inline" title="How: setTheme() writes localStorage. Does: Switches CSS tokens. Changing: Affects only UI chrome, no backend.">Theme  <select id="settings-theme" onchange="setTheme(this.value)"><option value="light">Light</option><option value="dark">Dark</option><option value="system">System</option></select></label></div>
+<div class="row"><span class="note">Engine profiles, model library, and provider settings are in their own tabs. This tab will hold general Studio preferences.</span></div>
+</section>
+</div>
+
 
 </div>
 
@@ -539,22 +598,22 @@ providers.local.json (gitignored).</div>
 <h2 id="chat-title">Loaded model</h2>
 <div class="chat-controls">
 <span class="modesel">
-<label class="inline">model <select id="chat-provider" onchange="saveConvProvider(this.value)" title="Inference target for this conversation"></select></label>
-<label class="inline"><input type="radio" name="chatmode" value="hive" checked title="Curated generation: the hive assembles the context, then generates directly."> Hive </label>
-<label class="inline"><input type="radio" name="chatmode" value="agent" title="The full DeepSeek Harness agent loop — tools, multi-step turns, session log — pointed at the loaded model."> Agent (dsh) </label>
+<label class="inline">model <select id="chat-provider" onchange="saveConvProvider(this.value)" title="How: select saves to localStorage hive-console-convprov, sent as provider on /v1/hive/turn vs /v1/agent/stream, swaps Hive.backend via registry. Does: Per-conversation model/endpoint. Changing: Pick different engine → different base_url/model for this tab only."></select></label>
+<label class="inline"><input type="radio" name="chatmode" value="hive" checked title="How: POST /v1/hive/stream → hive.process_turn curates assembled_content → single generate. Does: No tools, fast curated. Changing: Good for chat/memory; Agent needed for bash/code."> Hive </label>
+<label class="inline"><input type="radio" name="chatmode" value="agent" title="How: POST /v1/agent/stream → DshAgentService loop with tools/session log. Does: Full agent (bash/fs/web/subagent). Changing: Use for code/tasks; slower but multi-step."> Agent (dsh) </label>
 </span>
-<button onclick="newConversation()" title="Opens a fresh session tab; the current one stays in the tab strip.">New conversation</button>
+<button onclick="newConversation()" title="How: newConversation() creates console-<uuid>, localStorage SESS_KEY, clears chatlog. Does: New hive conversation. Changing: Old tab kept; config changes apply only after New.">New conversation</button>
 </div>
 </div>
 <div id="chatlog" class="chatlog"></div>
 <div class="composer">
-<span class="sugwrap composer-input"><input id="chatin" placeholder="Talk to the loaded AI…  (/ for commands)" title="Send a message to the loaded model. Hive mode curates context automatically; Agent mode runs the full DSH tool loop. Use / for slash commands."
+<span class="sugwrap composer-input"><input id="chatin" placeholder="Talk to the loaded AI…  (/ for commands)" title="How: Enter → chatSubmit routes / → /v1/commands/run else sendChat/sendAgent via Hive vs Agent. Does: Sends prompt through hive curate+generate or agent loop. Changing: /command vs message decides path."
        onkeydown="if (event.key === 'Enter') chatSubmit()" autocomplete="off">
 <div class="sugbox" id="sug-chat"></div></span>
 <button id="sendbtn" onclick="chatSubmit()">Send</button>
 <button id="stopbtn" onclick="cancelStream()">Stop</button>
-<button id="savebtn" onclick="saveSession()" title="Name and keep this session as a tab. Tabs and transcripts survive page reloads.">Save session</button>
-<button onclick="newConversation()" title="Opens a fresh session tab right away; the current one stays in the tab strip.">+ New session</button>
+<button id="savebtn" onclick="saveSession()" title="How: saveSession prompts title → sessions[convId].title → localStorage. Does: Persists tab+transcript (restoreTranscript caps 400). Changing: Name to keep; close × deletes + POST /v1/hive/reset.">Save session</button>
+<button onclick="newConversation()" title="How: Same as top New. Does: New session immediately. Changing: Same effect.">+ New session</button>
 </div>
 <div class="note"><b>Hive</b>: direct curated generation. <b>Agent (dsh)</b>:
 the full DeepSeek Harness agent loop — bash/files/code tools, multi-step
@@ -570,29 +629,29 @@ turns, durable session log.</div>
 <button onclick="api('/v1/server/stop', 'POST').then(() => refresh())">Stop</button></div>
 <div class="row">
 <label class="inline" style="flex:1">Model <select id="launch-model-select" style="flex:1;min-width:220px"><option value="">— choose local model —</option></select></label>
-<span class="sugwrap"><input id="model" placeholder="or type path" size="18" list="local-suggestions" title="Pick from Local library dropdown or type a GGUF path; blank uses Hugging Face repo/file below.">
+<span class="sugwrap"><input id="model" placeholder="or type path" size="18" list="local-suggestions" title="How: launchBody model → resolve_model local else needs hf_repo/file. Does: Sets -m path. Changing: Pick dropdown or type path; blank → must fill hf below or 400.">
 <datalist id="local-suggestions"></datalist></span>
-<label class="inline" title="Context window in tokens llama-server serves; caps prompt + reply together.">ctx  <input id="ctx" type="number" value="8192" size="4"></label>
-<label class="inline" title="Model layers offloaded to the GPU. 999 = every layer (needs enough VRAM); lower it if you run out.">gpu  <input id="ngl" type="number" value="999" size="3"></label>
-<label class="inline" title="Bearer token llama-server expects on requests; leave blank when none is set.">api-key  <input id="l-apikey" size="10" placeholder="(none)"></label><br>
+<label class="inline" title="How: ctx_size → -c (8192), KV 0.07/1024 GB tier vs 0.25GB/1k fit. Does: Caps prompt+reply. Changing: 8k→32k +2GB KV → spill/oom; >16k Auto→q8_0.">ctx  <input id="ctx" type="number" value="8192" size="4"></label>
+<label class="inline" title="How: ngl → -ngl, 999=all clamped to est_layers. Does: GPU offload. Changing: 999 needs VRAM≥size+KV else exit; lower fits but slower.">gpu  <input id="ngl" type="number" value="999" size="3"></label>
+<label class="inline" title="How: api_key → --api-key + provider auth. Does: Protects server. Changing: Set → clients need Bearer.">api-key  <input id="l-apikey" size="10" placeholder="(none)"></label><br>
 <span class="sugwrap"><input id="hfrepo" placeholder="--hf-repo (type to search)" size="30">
 <div class="sugbox" id="sug-hfrepo"></div></span>
-<input id="hffile" placeholder="--hf-file" size="18" title="Hugging Face source: repo id plus the exact GGUF filename inside it.">
+<input id="hffile" placeholder="--hf-file" size="18" title="How: hffile → --hf-file with hfrepo. Does: Direct HF pull. Changing: Both needed if no local model.">
 <button onclick="startServer(this)">Start</button></div>
 <details><summary>Advanced launch flags</summary>
 <div class="row">
-<label class="inline" title="CPU threads for inference; blank = automatic.">threads  <input id="l-threads" type="number" size="3" placeholder="auto"></label>
-<label class="inline"><input id="l-fa" type="checkbox" title="FlashAttention kernels: faster attention and lower VRAM at long context."> flash-attn </label>
-<label class="inline" title="Requests decoded concurrently; each slot shares the context window.">parallel  <input id="l-parallel" type="number" size="2" placeholder="1"></label>
-<label class="inline"><input id="l-mlock" type="checkbox" title="Lock model weights in RAM so they never page to disk; slower startup."> mlock </label>
-<label class="inline"><input id="l-nommap" type="checkbox" title="Read weights fully into memory instead of memory-mapping the file."> no-mmap </label>
+<label class="inline" title="How: -t <n> or omit auto. Does: CPU parallelism. Changing: 4→16 up tok/s, over→down.">threads  <input id="l-threads" type="number" size="3" placeholder="auto"></label>
+<label class="inline"><input id="l-fa" type="checkbox" title="How: -fa on if set, auto on when ctx>=8192. Does: Faster long ctx. Changing: off→on +10-30% at 32k, needs GPU."> flash-attn </label>
+<label class="inline" title="How: -np <n> parallel slots. Does: Concurrent decode, ctx/slots. Changing: 1→4 throughput up, per-slot ctx down.">parallel  <input id="l-parallel" type="number" size="2" placeholder="1"></label>
+<label class="inline"><input id="l-mlock" type="checkbox" title="How: mlock → --mlock. Does: Pins RAM, no swap. Changing: Slower start, stable."> mlock </label>
+<label class="inline"><input id="l-nommap" type="checkbox" title="How: no_mmap → --no-mmap. Does: Full RAM vs mmap. Changing: More RSS, avoids faults."> no-mmap </label>
 </div>
 <div class="row">
-<label class="inline" title="Quantize the attention key cache to save VRAM (small quality cost).">kv-K  <select id="l-ctk"><option value="">f16</option><option>q8_0</option><option>q4_0</option></select></label>
-<label class="inline" title="Same quantization for the value cache.">kv-V  <select id="l-ctv"><option value="">f16</option><option>q8_0</option><option>q4_0</option></select></label>
-<label class="inline" title="Logical prompt-processing batch size.">batch  <input id="l-batch" type="number" size="4" placeholder="512"></label>
-<label class="inline" title="Physical micro-batch fed to the model per step.">ubatch  <input id="l-ubatch" type="number" size="4" placeholder="512"></label>
-<label class="inline" title="Model id exposed on /v1/models instead of the file path.">alias  <input id="l-alias" size="14" placeholder="model id"></label>
+<label class="inline" title="How: cache K → --cache-type-k f16/q8_0/q4_0, Auto q8_0 >16k. Does: Halves KV. Changing: f16→q8 saves 50%.">kv-K  <select id="l-ctk"><option value="">f16</option><option>q8_0</option><option>q4_0</option></select></label>
+<label class="inline" title="How: --cache-type-v same. Does: V cache quant. Changing: Same as K.">kv-V  <select id="l-ctv"><option value="">f16</option><option>q8_0</option><option>q4_0</option></select></label>
+<label class="inline" title="How: -b <n> 512 default. Does: Tokens/step RAM. Changing: 512→2048 prompt faster, more VRAM/spill.">batch  <input id="l-batch" type="number" size="4" placeholder="512"></label>
+<label class="inline" title="How: -ub <n> 512. Does: Micro-batch physically. Changing: 512→128 lower peak but more steps; tune with batch.">ubatch  <input id="l-ubatch" type="number" size="4" placeholder="512"></label>
+<label class="inline" title="How: --alias <id>. Does: Model id vs path. Changing: Clients see alias.">alias  <input id="l-alias" size="14" placeholder="model id"></label>
 </div>
 </details>
 <pre id="status">loading…</pre>
@@ -616,13 +675,15 @@ if (!convId) {{
 let hiveOverrides = {{}};
 // engDirty declared in unified grid block above
 
-async function api(path, method, body) {{
+async function api(path, method, body, signal) {{
   const headers = {{'content-type': 'application/json'}};
   const token = localStorage.getItem('hive-token');
   if (token) headers['x-hive-token'] = token;
-  const r = await fetch(path, {{method: method || 'GET', headers,
-    body: body === undefined ? (method === 'POST' ? '{{}}' : undefined)
-                             : JSON.stringify(body)}});
+  const opts={{method: method || 'GET', headers}};
+  if(body !== undefined && body !== null) opts.body=JSON.stringify(body);
+  else if(method === 'POST' && body === undefined) opts.body='{{}}';
+  if(signal) opts.signal=signal;
+  const r = await fetch(path, opts);
   if (r.status === 401) {{
     const t = prompt('This server requires an access token (HARNESS_TOKEN):');
     if (t !== null) {{ localStorage.setItem('hive-token', t); }}
@@ -632,24 +693,429 @@ async function api(path, method, body) {{
   if (!r.ok) throw new Error(r.status + ': ' + t.slice(0, 400));
   return t.startsWith('{{') ? JSON.parse(t) : t;
 }}
-function show(id, obj) {{ document.getElementById(id).textContent =
-  typeof obj === 'string' ? obj : JSON.stringify(obj, null, 1); }}
-function val(id) {{ return document.getElementById(id).value.trim(); }}
+window.onerror=(msg, src, line, col, err)=>{{ console.error('ONERROR', msg, src+':'+line+':'+col, err); const t=document.getElementById('top-right-status'); if(t) t.textContent='JS ERROR: '+msg.slice(0,120); alert('JS ERROR: '+msg+'\\n'+src+':'+line); }};
+window.onunhandledrejection=(e)=>{{ console.error('UNHANDLED REJECTION', e.reason); alert('UNHANDLED: '+String(e.reason).slice(0,300)); }};
+function show(id, obj) {{ 
+  try{{
+    const el=document.getElementById(id);
+    if(!el){{ console.warn('show missing', id); return; }}
+    el.textContent=typeof obj === 'string' ? obj : JSON.stringify(obj, null, 1);
+  }} catch(err){{ console.error('show failed', id, err); }}
+}}
+function val(id) {{ const el=document.getElementById(id); if(!el){{ console.warn('val missing', id); return ''; }} return el.value.trim(); }}
 function num(id) {{ const v = val(id); return v === '' ? null : +v; }}
+function fmtCap(n) {{ if(n==null||n==='-') return '-'; n=Number(n); if(n>=1000000) return (n/1000000).toFixed(1)+'M'; if(n>=1000) return (n/1000).toFixed(1)+'K'; return String(n); }}
 
 /* ------------------------------ tabs -------------------------------- */
-for (const btn of document.querySelectorAll('.tab')) {{
-  btn.addEventListener('click', () => {{
-    for (const b of document.querySelectorAll('.tab')) b.classList.remove('active');
-    for (const p of document.querySelectorAll('.tabpane')) p.style.display = 'none';
-    btn.classList.add('active');
-    document.getElementById(btn.dataset.tab).style.display = '';
-    if (btn.dataset.tab === 'tab-agent') loadAgentPresets();
-    if (btn.dataset.tab === 'tab-engines') loadEngines();
-    if (btn.dataset.tab === 'tab-hive') loadHiveDefaults();
-    if (btn.dataset.tab === 'tab-providers') loadProviders();
+for (const btn of document.querySelectorAll('.tab[data-tab]')) {{
+  btn.addEventListener('click', (e) => {{
+    try{{
+      console.log('outer tab click', btn.dataset.tab);
+      for (const b of document.querySelectorAll('.tab[data-tab]')) b.classList.remove('active');
+      for (const p of document.querySelectorAll('.tabpane')) p.style.display = 'none';
+      btn.classList.add('active');
+      const pane=document.getElementById(btn.dataset.tab);
+      if(pane) pane.style.display = '';
+      // Defer library load to avoid blocking tab switch
+      if (btn.dataset.tab === 'tab-library') setTimeout(loadLibrary, 10);
+      else if (btn.dataset.tab === 'tab-setup') {{ loadSetup(); loadDrives(); }}
+      else if (btn.dataset.tab === 'tab-agent') loadAgentPresets();
+      else if (btn.dataset.tab === 'tab-engines') loadEngines();
+      else if (btn.dataset.tab === 'tab-hive') loadHiveDefaults();
+      else if (btn.dataset.tab === 'tab-providers') loadProviders();
+    }} catch(err){{ console.error('tab click failed', err); alert('tab error: '+err.message); }}
   }});
 }}
+let _libCache={{system: null, linux: null, ts: 0}};
+function switchLibraryTab(tab, ev) {{
+  if(ev) {{ ev.preventDefault(); ev.stopPropagation(); ev.stopImmediatePropagation(); }}
+  // Ensure outer Local Library stays open
+  const outer=document.getElementById('tab-library');
+  if(outer) outer.style.display='';
+  // Keep outer tab active
+  for(const b of document.querySelectorAll('.tab[data-tab]')) b.classList.toggle('active', b.dataset.tab==='tab-library');
+  const prevSel=window._selectedFile;
+  for (const b of document.querySelectorAll('[data-rtab^="lib-"]')) b.classList.remove('active');
+  for (const p of document.querySelectorAll('.lib-tabpane')) p.style.display = 'none';
+  const btn=document.querySelector(`[data-rtab="${{tab}}"]`);
+  const pane=document.getElementById(tab);
+  if(btn) btn.classList.add('active');
+  if(pane) pane.style.display = '';
+  const now=Date.now();
+  const fresh=now - _libCache.ts < 30000;
+  if (tab === 'lib-system') {{
+    if(_libCache.system && fresh) renderLibrary('local-system', _libCache.system, 'system');
+    else loadLibrarySystem();
+  }}
+  if (tab === 'lib-linux') {{
+    if(_libCache.linux && fresh) renderLibrary('local-linux', _libCache.linux, 'linux');
+    else loadLibraryLinux();
+  }}
+  // Preserve selection across tab switches — restore after render
+  setTimeout(()=>{{
+    if(prevSel) {{
+      window._selectedFile=prevSel;
+      for(const id of ['local-system','local-linux']) {{
+        const w=document.getElementById(id);
+        if(!w) continue;
+        for(const r of w.children) r.classList.toggle('selected', r.dataset.file===prevSel);
+      }}
+    }}
+  }}, 10);
+  return false;
+}}
+
+/* ------------------------------ setup wizard (hive console) ------------------------------ */
+async function loadSetup() {{
+  const ctxSel = document.getElementById('setup-ctx');
+  const dualCb = document.getElementById('setup-dual');
+  const ctx = ctxSel ? ctxSel.value : '32768';
+  const dual = dualCb ? dualCb.checked : false;
+  await refreshSetup(ctx, dual);
+}}
+async function refreshSetup(ctx, dual) {{
+  if (ctx === undefined) {{
+    const c = document.getElementById('setup-ctx');
+    ctx = c ? c.value : '32768';
+  }}
+  if (dual === undefined) {{
+    const d = document.getElementById('setup-dual');
+    dual = d ? d.checked : false;
+  }}
+  const msg = document.getElementById('setup-msg');
+  const healthEl = document.getElementById('setup-health');
+  const tierEl = document.getElementById('setup-tier');
+  const rawEl = document.getElementById('setup-raw');
+  if (msg) msg.textContent = 'loading…';
+  try {{
+    const vhdxQ = document.getElementById('setup-vhdx')?.value.trim() || '';
+    const modelGbQ = document.getElementById('setup-model-gb')?.value.trim() || '';
+    const s = await api('/v1/setup/status?context=' + encodeURIComponent(ctx) + '&dual=' + (dual ? 'true' : 'false') + (vhdxQ ? '&vhdx=' + encodeURIComponent(vhdxQ) : '') + (modelGbQ ? '&model_gb=' + encodeURIComponent(modelGbQ) : ''));
+    const eng = document.getElementById('setup-engine');
+    if (eng && s.state) eng.value = s.state.engine || 'windows-vulkan';
+    const vhdx = document.getElementById('setup-vhdx');
+    if (vhdx && s.state) vhdx.value = s.state.vhdxPath || 'E:/dsh_storage.vhdx';
+    const mdir = document.getElementById('setup-modelsdir');
+    if (mdir && s.state) mdir.value = s.state.modelsDir || 'E:/models';
+    const mp = document.getElementById('setup-mount');
+    if (mp && s.state) mp.value = s.state.mountPoint || '/mnt/dsh_storage';
+    const lin = s.health?.linux || {{}};
+    const win = s.health?.windows || {{}};
+    if (healthEl && s.health) {{
+      const orderFor=(key, ok)=> {{
+        if (ok) return '';
+        if (key==='vhdx-missing') return ' → Fix: 1. Create Drive';
+        if (key==='vhdx-not-mounted') return ' → Fix: 1. Mount AI Drive → 2. Bootstrap Docker';
+        if (key==='linux-stopped') {{
+          if (!lin.vhdxExists) return ' → Fix: 1. Create Drive → 2. Mount AI Drive → 3. Bootstrap Docker';
+          if (!lin.vhdxMounted) return ' → Fix: 1. Mount AI Drive → 2. Bootstrap Docker';
+          return ' → Fix: 1. Bootstrap Docker';
+        }}
+        if (key==='docker-down') {{
+          if (!lin.vhdxExists) return ' → Fix: 1. Create Drive → 2. Mount AI Drive → 3. Bootstrap Docker';
+          if (!lin.vhdxMounted) return ' → Fix: 1. Mount AI Drive → 2. Bootstrap Docker';
+          return ' → Fix: 1. Bootstrap Docker';
+        }}
+        if (key==='complete' || key==='ready') {{
+          if (!lin.vhdxExists) return ' → Fix: 1. Create Drive → 2. Mount AI Drive → 3. Bootstrap Docker';
+          if (!lin.vhdxMounted) return ' → Fix: 1. Mount AI Drive → 2. Bootstrap Docker';
+          if (!lin.shardsFound) return ' → Fix: add .gguf to /mnt/dsh_storage/models (no button)';
+          if (!lin.dockerRunning) return ' → Fix: 1. Bootstrap Docker';
+          return ' → Fix: check diskFull';
+        }}
+        return '';
+      }};
+      const st=(ok,msg, key)=> {{
+        const tip = msg + (ok ? '' : orderFor(key, ok));
+        const esc = tip.replace(/"/g, '&quot;');
+        return ok?`<b style="color:#157a3e" title="${{esc}}">✔ ${{msg.split(' — ')[0]}}</b>`:`<b style="color:#b3372c" title="${{esc}}">✘ ${{msg}}</b>`;
+      }};
+      healthEl.style.display='grid'; healthEl.style.gridTemplateColumns='160px 1fr'; healthEl.style.gap='8px 10px'; healthEl.style.padding='0'; healthEl.style.background='transparent'; healthEl.style.border='none'; healthEl.style.color='#FFDD00';
+      healthEl.innerHTML = ''
+        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">Windows</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + st(win.state==='running', win.state==='running'?'running — Windows sidecar on :'+(win.port||8765):'Windows not running — start Hive Studio', 'windows') + '</div>'
+        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">Linux</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + st(lin.state==='running', lin.state==='running'?'Linux running — Docker on :'+(lin.port||8000):'Linux stopped — Bootstrap Docker', 'linux-stopped') + '</div>'
+        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">VHDX</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + st(lin.vhdxExists, lin.vhdxExists?(lin.vhdxMounted?'VHDX mounted — ready':'VHDX exists but not mounted — click Mount AI Drive and approve UAC'):'VHDX missing — click Create Drive and pick size', lin.vhdxExists ? 'vhdx-not-mounted' : 'vhdx-missing') + '</div>'
+        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">Shards</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + st(lin.shardsFound, lin.shardsFound?'Shards found — '+(lin.shardPath||'').split('/').pop():'Shards missing — add .gguf to /mnt/dsh_storage/models via WSL or move from System', 'shards') + '</div>'
+        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">Docker 8000</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + st(lin.dockerRunning, lin.dockerRunning?'Docker healthy — :8000 200':'Docker down — Bootstrap Docker or docker compose up dsh-compute-backend', 'docker-down') + '</div>'
+        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">Complete</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + st(s.complete, s.complete?'Complete — WebUI :3000 → :8000 ready':'Not complete — fix VHDX/mount/shards/docker above', 'complete') + '</div>';
+    }}
+    if (tierEl && s.tier) {{
+      const m = s.tier.metrics || {{}};
+      const f = s.tier.flags || {{}};
+      tierEl.style.display='grid'; tierEl.style.gridTemplateColumns='160px 1fr'; tierEl.style.gap='8px 10px'; tierEl.style.padding='12px'; tierEl.style.background='#000'; tierEl.style.border='1.5px solid #FFB703'; tierEl.style.borderRadius='8px'; tierEl.style.color='#FFDD00';
+      tierEl.innerHTML = ''
+        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem" title="Combined VRAM — cross-platform">VRAM</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + (m.tier1VramGb ?? '-') + ' GB</div>'
+        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem" title="Total RAM — cross-platform">RAM</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + (m.tier2RamGb ?? '-') + ' GB</div>'
+        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem; display:flex; flex-direction:column; gap:.35rem" title="T3 spill estimator: model+KV - VRAM - RAM. Change model GB here."><span>T3 spill estimator</span><label class="inline" style="margin:0; display:flex; gap:.2rem; align-items:center; background:rgba(0,0,0,.25); border:1px solid rgba(255,221,0,.18); border-radius:4px; padding:.15rem .3rem; width:fit-content">model <input id="setup-model-gb" type="number" value="' + (m.modelGb ?? 104) + '" min="1" max="2000" step="1" style="width:45px; text-align:right; background:#000; color:#FFDD00; border:1px solid rgba(255,221,0,.4); border-radius:3px; padding:.1rem .2rem; -moz-appearance:textfield; appearance:textfield" onchange="refreshStatus()"><span style="color:#FFDD00; opacity:.9; font-size:.85em">GB</span></label></div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + (m.tier3NvmeGb ?? '-') + ' GB</div>'
+        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem" title="Max context from leftover without clamp">Max context</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + fmtCap(f.recommendCap) + '</div>'
+        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem" title="Effective bandwidth weighted by tiers">Speed</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + (m.estEffectiveBw ?? '-') + ' GB/s</div>'
+        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem" title="Space left after spill">Free space</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + (m.freeAfterSpillGb ?? '-') + ' GB</div>';
+    }}
+    if (rawEl) {{
+      rawEl.textContent = JSON.stringify(s, null, 1);
+      rawEl.style.display = 'none';
+      console.log('[Hive] setup status', s);
+    }}
+    const dockerEl = document.getElementById('setup-docker');
+    if (dockerEl) {{
+      const lin2 = s.health.linux || {{}};
+      dockerEl.textContent = 'VHDX ' + (lin2.vhdxExists ? 'exists' : 'missing') + ' (' + (s.state.vhdxPath || '-') + ')\\n'
+        + 'Mount ' + (lin2.vhdxMounted ? 'mounted' : 'not mounted') + ' → ' + (s.state.mountPoint || '/mnt/dsh_storage') + '\\n'
+        + 'Shards ' + (lin2.shardsFound ? 'found ' + (lin2.shardPath || '').split('/').pop() : 'missing') + '\\n'
+        + 'Docker http://127.0.0.1:8000/health → ' + (lin2.dockerRunning ? '200 healthy' : 'down — docker compose up dsh-compute-backend') + '\\n'
+        + 'WebUI :3000 → dsh-compute-backend:8000/v1 ' + (lin2.dockerRunning ? 'route ready' : 'route down');
+      console.log('[Hive] Docker details', dockerEl.textContent);
+    }} else {{
+      const lin2 = s.health.linux || {{}};
+      console.log('[Hive] Docker details', 'VHDX ' + (lin2.vhdxExists ? 'exists' : 'missing') + ' (' + (s.state.vhdxPath || '-') + ') — Mount ' + (lin2.vhdxMounted ? 'mounted' : 'not mounted'));
+    }}
+    if (msg) {{
+      const readyTip = s.complete ? 'Ready to run — WebUI :3000 → :8000 ready' : 'Not ready — fix: ' + (!lin.vhdxExists ? '1. Create Drive' : !lin.vhdxMounted ? '1. Mount AI Drive → 2. Bootstrap Docker' : !lin.shardsFound ? 'add .gguf to /mnt/dsh_storage/models (no button)' : !lin.dockerRunning ? '1. Bootstrap Docker' : 'check diskFull');
+      const readyEsc = readyTip.replace(/"/g, '&quot;');
+      msg.innerHTML = s.complete ? '<b style="color:#157a3e" title="'+readyEsc+'">✔</b>' : '<b style="color:#b3372c" title="'+readyEsc+'">✘</b>';
+      console.log('[Hive] Ready', msg.textContent);
+    }}
+    try {{ if (typeof updateFit === 'function') updateFit(); }} catch(e) {{}}
+  }} catch(e) {{
+    if (msg) msg.textContent = 'load failed: ' + String(e).slice(0,120);
+    if (healthEl) healthEl.textContent = String(e).slice(0,200);
+  }}
+}}
+async function verifySetup() {{
+  const msg = document.getElementById('setup-msg');
+  const rawEl = document.getElementById('setup-raw');
+  if (msg) msg.innerHTML = '<b style="color:#5a6b7d">…</b> verifying…';
+  try {{
+    const ctx = document.getElementById('setup-ctx')?.value || '32768';
+    const dual = document.getElementById('setup-dual')?.checked ? 'true' : 'false';
+    const vhdxV = document.getElementById('setup-vhdx')?.value.trim() || '';
+    const modelGbV = document.getElementById('setup-model-gb')?.value.trim() || '';
+    const s = await api('/v1/setup/status?context=' + encodeURIComponent(ctx) + '&dual=' + dual + (vhdxV ? '&vhdx=' + encodeURIComponent(vhdxV) : '') + (modelGbV ? '&model_gb=' + encodeURIComponent(modelGbV) : ''));
+    const lin = s.health.linux || {{}};
+    const ok = lin.vhdxExists && lin.vhdxMounted && lin.shardsFound && lin.dockerRunning && !s.tier.flags.diskFull;
+    if (msg) msg.innerHTML = ok ? '<b style="color:#157a3e">✔</b> verify:live LINKED — ready to launch (32k)' : '<b style="color:#b3372c">✘</b> verify:live NOT LINKED — fix: ' + (!lin.vhdxExists ? 'VHDX missing' : !lin.vhdxMounted ? 'not mounted → wsl --mount --vhd E:/dsh_storage.vhdx --bare' : !lin.shardsFound ? 'shards missing at ' + (s.state.mountPoint || '/mnt/dsh_storage') : !lin.dockerRunning ? 'docker 8000 down → docker compose up dsh-compute-backend' : s.tier.flags.diskFull ? 'disk >80% full' : 'check');
+    if (rawEl) {{
+      rawEl.textContent = JSON.stringify(s, null, 1);
+      rawEl.style.display = rawEl.style.display === 'none' ? 'block' : 'none';
+    }}
+    try {{
+      const vhdxH = document.getElementById('setup-vhdx')?.value.trim() || '';
+      const h = await api('/v1/setup/health' + (vhdxH ? '?vhdx=' + encodeURIComponent(vhdxH) : ''));
+      if (rawEl && rawEl.style.display !== 'none') rawEl.textContent += '\\n\\nhealth: ' + JSON.stringify(h, null, 1);
+    }} catch(e) {{}}
+  }} catch(e) {{
+    if (msg) msg.textContent = 'verify failed: ' + String(e).slice(0,150);
+  }}
+}}
+async function refreshStatus() {{
+  const msg = document.getElementById('setup-msg');
+  const healthEl = document.getElementById('setup-health');
+  const tierEl = document.getElementById('setup-tier');
+  const rawEl = document.getElementById('setup-raw');
+  const dockerEl = document.getElementById('setup-docker');
+  if (msg) msg.innerHTML = '<b style="color:#5a6b7d">…</b>';
+  try {{
+    const ctx = document.getElementById('setup-ctx')?.value || '32768';
+    const dual = document.getElementById('setup-dual')?.checked ? 'true' : 'false';
+    const vhdxV = document.getElementById('setup-vhdx')?.value.trim() || '';
+    const modelGbV = document.getElementById('setup-model-gb')?.value.trim() || '';
+    const s = await api('/v1/setup/status?context=' + encodeURIComponent(ctx) + '&dual=' + dual + (vhdxV ? '&vhdx=' + encodeURIComponent(vhdxV) : '') + (modelGbV ? '&model_gb=' + encodeURIComponent(modelGbV) : ''));
+    // Update health/tier like refreshSetup (single fetch, no double load)
+    const lin = s.health.linux || {{}};
+    const win = s.health.windows || {{}};
+    const st=(ok,mm)=> ok?`<b style="color:#157a3e" title="${{mm}}">✔ ${{mm.split(' — ')[0]}}</b>`:`<b style="color:#b3372c" title="${{mm}}">✘ ${{mm}}</b>`;
+    if (healthEl && s.health) {{
+      healthEl.style.display='grid'; healthEl.style.gridTemplateColumns='160px 1fr'; healthEl.style.gap='8px 10px'; healthEl.style.padding='0'; healthEl.style.background='transparent'; healthEl.style.border='none'; healthEl.style.color='#FFDD00';
+      healthEl.innerHTML = ''
+        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">Windows</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + st(win.state==='running', win.state==='running'?'running — Windows sidecar on :'+(win.port||8765):'Windows not running — start Hive Studio') + '</div>'
+        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">Linux</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + st(lin.state==='running', lin.state==='running'?'Linux running — Docker on :'+(lin.port||8000):'Linux stopped — Bootstrap Docker') + '</div>'
+        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">VHDX</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + st(lin.vhdxExists, lin.vhdxExists?(lin.vhdxMounted?'VHDX mounted — ready':'VHDX exists but not mounted — click Mount AI Drive and approve UAC'):'VHDX missing — click Create Drive and pick size') + '</div>'
+        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">Shards</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + st(lin.shardsFound, lin.shardsFound?'Shards found — '+(lin.shardPath||'').split('/').pop():'Shards missing — add .gguf to /mnt/dsh_storage/models via WSL or move from System') + '</div>'
+        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">Docker 8000</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + st(lin.dockerRunning, lin.dockerRunning?'Docker healthy — :8000 200':'Docker down — Bootstrap Docker or docker compose up dsh-compute-backend') + '</div>'
+        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">Complete</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + st(s.complete, s.complete?'Complete — WebUI :3000 → :8000 ready':'Not complete — fix VHDX/mount/shards/docker above') + '</div>';
+    }}
+    if (tierEl && s.tier) {{
+      const m = s.tier.metrics || {{}};
+      const f = s.tier.flags || {{}};
+      tierEl.style.display='grid'; tierEl.style.gridTemplateColumns='160px 1fr'; tierEl.style.gap='8px 10px'; tierEl.style.padding='12px'; tierEl.style.background='#000'; tierEl.style.border='1.5px solid #FFB703'; tierEl.style.borderRadius='8px'; tierEl.style.color='#FFDD00';
+      tierEl.innerHTML = ''
+        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem" title="Combined VRAM — cross-platform">VRAM</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + (m.tier1VramGb ?? '-') + ' GB</div>'
+        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem" title="Total RAM — cross-platform">RAM</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + (m.tier2RamGb ?? '-') + ' GB</div>'
+        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem; display:flex; flex-direction:column; gap:.35rem" title="T3 spill estimator: model+KV - VRAM - RAM. Change model GB here."><span>T3 spill estimator</span><label class="inline" style="margin:0; display:flex; gap:.2rem; align-items:center; background:rgba(0,0,0,.25); border:1px solid rgba(255,221,0,.18); border-radius:4px; padding:.15rem .3rem; width:fit-content">model <input id="setup-model-gb" type="number" value="' + (m.modelGb ?? 104) + '" min="1" max="2000" step="1" style="width:45px; text-align:right; background:#000; color:#FFDD00; border:1px solid rgba(255,221,0,.4); border-radius:3px; padding:.1rem .2rem; -moz-appearance:textfield; appearance:textfield" onchange="refreshStatus()"><span style="color:#FFDD00; opacity:.9; font-size:.85em">GB</span></label></div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + (m.tier3NvmeGb ?? '-') + ' GB</div>'
+        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem" title="Max context from leftover without clamp">Max context</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + fmtCap(f.recommendCap) + '</div>'
+        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem" title="Effective bandwidth weighted by tiers">Speed</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + (m.estEffectiveBw ?? '-') + ' GB/s</div>'
+        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem" title="Space left after spill">Free space</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + (m.freeAfterSpillGb ?? '-') + ' GB</div>';
+    }}
+    if (dockerEl) {{
+      const lin2 = s.health.linux || {{}};
+      dockerEl.textContent = 'VHDX ' + (lin2.vhdxExists ? 'exists' : 'missing') + ' (' + (s.state.vhdxPath || '-') + ')\\n'
+        + 'Mount ' + (lin2.vhdxMounted ? 'mounted' : 'not mounted') + ' → ' + (s.state.mountPoint || '/mnt/dsh_storage') + '\\n'
+        + 'Shards ' + (lin2.shardsFound ? 'found ' + (lin2.shardPath || '').split('/').pop() : 'missing') + '\\n'
+        + 'Docker http://127.0.0.1:8000/health → ' + (lin2.dockerRunning ? '200 healthy' : 'down — docker compose up dsh-compute-backend') + '\\n'
+        + 'WebUI :3000 → dsh-compute-backend:8000/v1 ' + (lin2.dockerRunning ? 'route ready' : 'route down');
+      console.log('[Hive] Docker details', dockerEl.textContent, s.health, s.state);
+    }} else {{
+      console.log('[Hive] Docker details', s.health.linux, s.state);
+    }}
+    const ok = lin.vhdxExists && lin.vhdxMounted && lin.shardsFound && lin.dockerRunning && !s.tier.flags.diskFull;
+    const orderTip = !ok ? (!lin.vhdxExists ? 'Fix: 1. Create Drive' : !lin.vhdxMounted ? 'Fix: 1. Mount AI Drive → 2. Bootstrap Docker' : !lin.shardsFound ? 'Fix: add .gguf (no button)' : !lin.dockerRunning ? 'Fix: 1. Bootstrap Docker' : 'Fix: check diskFull') : 'Ready — WebUI :3000 → :8000 ready';
+    const orderEsc = orderTip.replace(/"/g, '&quot;');
+    const tick = ok ? '<b style="color:#157a3e" title="'+orderEsc+'">✔</b>' : '<b style="color:#b3372c" title="'+orderEsc+'">✘</b>';
+    const baseDetail = ok ? 'verify:live LINKED — ready to launch' : 'fix: ' + (!lin.vhdxExists ? 'VHDX missing' : !lin.vhdxMounted ? 'not mounted → wsl --mount --vhd E:/dsh_storage.vhdx --bare' : !lin.shardsFound ? 'shards missing' : !lin.dockerRunning ? 'docker down' : 'disk >80%');
+    if (rawEl) {{ rawEl.textContent = JSON.stringify(s, null, 1); rawEl.style.display = 'none'; console.log('[Hive] setup status', s); }}
+    // merged Test WebUI ↔ Docker — wait for Docker 8000 + WebUI 3000, then merge into one sentence (Docker loads last) — console only (details hidden)
+    let dockerExtra = '';
+    let webuiExtra = '';
+    let dockerModels = null;
+    let dockerErr = null;
+    let webuiOk = false;
+    try {{
+      dockerModels = await api('/v1/setup/docker-models').catch(e => {{ throw new Error('Docker 8000 /v1/models failed: ' + (e.message || e)); }});
+      const count = dockerModels && dockerModels.data ? dockerModels.data.length : 0;
+      dockerExtra = ' · Docker ' + (count ? count + ' model' + (count===1?'':'s') : 'reachable') + ' (' + (lin.dockerRunning ? '8000 ok' : '8000 ok but health says down') + ')';
+      if (dockerEl) dockerEl.textContent += '\\n\\nTest WebUI ↔ Docker:\\nDocker /v1/models:\\n' + JSON.stringify(dockerModels, null, 1).slice(0,1200);
+      console.log('[Hive] Docker /v1/models (via harness proxy, no CORS)', dockerModels);
+    }} catch(e) {{
+      dockerErr = String(e.message || e).slice(0,600);
+      dockerExtra = ' · Docker unreachable (http://127.0.0.1:8000/health — ' + (lin.dockerRunning ? 'health says up but fetch failed' : 'docker down') + ')';
+      if (dockerEl) dockerEl.textContent += '\\n\\nTest WebUI ↔ Docker failed:\\n' + dockerErr + '\\nDocker health: http://127.0.0.1:8000/health';
+      console.warn('[Hive] Docker fetch failed (via harness proxy)', dockerErr);
+    }}
+    try {{
+      webuiOk = await fetch('http://127.0.0.1:3000', {{method: 'GET', mode: 'no-cors'}}).then(() => true).catch(() => false);
+      webuiExtra = ' · WebUI :3000 ' + (webuiOk ? 'reachable → dsh-compute-backend:8000/v1' : 'not reachable — open http://127.0.0.1:3000');
+      if (dockerEl) dockerEl.textContent += '\\n\\nWebUI :3000 → dsh-compute-backend:8000/v1 — ' + (webuiOk ? 'reachable (no-cors) route likely ok' : 'open http://127.0.0.1:3000 and check Settings → Connections');
+      console.log('[Hive] WebUI :3000', webuiOk ? 'reachable' : 'not reachable');
+      if (dockerEl) console.log('[Hive] Docker details (full)', dockerEl.textContent);
+    }} catch(e) {{
+      webuiExtra = ' · WebUI check failed';
+      console.warn('[Hive] WebUI check failed', e);
+    }}
+    // single merged sentence — wait until Docker (slowest) completes
+    const finalDetail = baseDetail + dockerExtra + webuiExtra;
+    const finalTip = (orderTip + dockerExtra + webuiExtra).replace(/"/g, '&quot;');
+    if (msg) msg.innerHTML = '<span style="display:inline-flex; gap:.6rem; align-items:center; flex-wrap:wrap" title="'+finalTip+'">' + tick + ' ' + (ok ? 'Ready' : 'Not ready') + ' <span style="opacity:.6">·</span> ' + finalDetail + '</span>';
+    console.log('[Hive] Ready', finalDetail);
+  }} catch(e) {{
+    if (msg) msg.textContent = 'load failed: ' + String(e).slice(0,120);
+  }}
+}}
+async function createDrive() {{
+  const vhdxEl = document.getElementById('setup-vhdx');
+  const vhdx = vhdxEl ? vhdxEl.value.trim() : '';
+  const sizeEl = document.getElementById('setup-vhdx-size');
+  const size_gb = sizeEl ? parseInt(sizeEl.value, 10) : 250;
+  const msg = document.getElementById('setup-msg');
+  const dockerEl = document.getElementById('setup-docker');
+  if (!vhdx) {{ if (msg) msg.textContent = 'select a drive first'; return; }}
+  if (!confirm('Create ' + size_gb + 'GB dynamic VHDX at ' + vhdx + '?\\n\\nThis creates a sparse virtual drive (initially small, max ' + size_gb + 'GB, grows as needed) at the chosen location and formats it to ext4 on first mount. Proceed?')) return;
+  if (msg) msg.textContent = 'creating VHDX at ' + vhdx + ' (' + size_gb + 'GB dynamic, sparse)…';
+  if (dockerEl) dockerEl.textContent = 'calling POST /v1/setup/create-vhdx for ' + vhdx + ' (' + size_gb + 'GB)…';
+  console.log('[Hive] Create Drive', vhdx, size_gb);
+  try {{
+    const r = await api('/v1/setup/create-vhdx', 'POST', {{vhdx, size_gb}});
+    if (msg) msg.textContent = r.already ? 'VHDX already exists at ' + vhdx : 'VHDX created at ' + vhdx + ' via ' + (r.method || 'New-VHD');
+    if (dockerEl) dockerEl.textContent = 'Create result:\\n' + JSON.stringify(r, null, 1).slice(0,1200);
+    console.log('[Hive] Create result', r);
+    await refreshSetup();
+  }} catch(e) {{
+    const txt = String(e.message || e);
+    if (msg) msg.textContent = 'create failed: ' + txt.slice(0,150);
+    if (dockerEl) dockerEl.textContent = 'Create failed:\\n' + txt.slice(0,800);
+    console.warn('[Hive] Create failed', txt);
+  }}
+}}
+async function mountBare() {{
+  const msg = document.getElementById('setup-msg');
+  const dockerEl = document.getElementById('setup-docker');
+  const vhdxEl = document.getElementById('setup-vhdx');
+  const vhdx = vhdxEl ? vhdxEl.value.trim() : '';
+  if (msg) msg.textContent = 'mounting VHDX as bare device (Admin UAC may pop)…';
+  if (dockerEl) dockerEl.textContent = 'calling POST /v1/setup/mount-bare' + (vhdx ? ' for ' + vhdx : '') + '…';
+  console.log('[Hive] Mount bare', vhdx || '(default)');
+  try {{
+    const r = await api('/v1/setup/mount-bare', 'POST', vhdx ? {{vhdx}} : {{}});
+    if (r.needs_elevation) {{
+      if (msg) msg.textContent = 'UAC shown on host — click Yes, then Bootstrap Docker';
+      if (dockerEl) dockerEl.textContent = 'UAC prompt shown on host desktop — click Yes in the Windows dialog, then click Bootstrap Docker.\\n' + (r.error || '').slice(0,500);
+      console.log('[Hive] Mount needs UAC', r);
+    }} else {{
+      if (msg) msg.textContent = 'bare mount OK';
+      if (dockerEl) dockerEl.textContent = 'Bare mount OK:\\n' + (r.output || '').slice(0,800);
+      console.log('[Hive] Bare mount OK', r);
+      await refreshSetup();
+    }}
+  }} catch(e) {{
+    const txt = String(e.message || e);
+    if (msg) msg.textContent = 'mount failed: ' + txt.slice(0,150);
+    if (dockerEl) dockerEl.textContent = 'Mount failed:\\n' + txt.slice(0,800) + '\\nFix: Right-click Mount_AI_Drive.bat → Run as administrator';
+    console.warn('[Hive] Mount failed', txt);
+  }}
+}}
+async function bootstrapDocker() {{
+  const dockerEl = document.getElementById('setup-docker');
+  const msg = document.getElementById('setup-msg');
+  const rawEl = document.getElementById('setup-raw');
+  const vhdxEl = document.getElementById('setup-vhdx');
+  const vhdx = vhdxEl ? vhdxEl.value.trim() : '';
+  if (msg) msg.textContent = 'bootstrapping — mounting + docker compose up…';
+  if (dockerEl) dockerEl.textContent = 'calling POST /v1/setup/bootstrap' + (vhdx ? ' for ' + vhdx : '') + '…\\n';
+  console.log('[Hive] Bootstrap Docker', vhdx || '(default)');
+  try {{
+    const r = await api('/v1/setup/bootstrap', 'POST', vhdx ? {{vhdx}} : {{}});
+    if (dockerEl) dockerEl.textContent = 'Bootstrap steps:\\n' + JSON.stringify(r.steps, null, 1).slice(0,1800) + '\\n\\nhealth: ' + JSON.stringify(r.health, null, 1).slice(0,800);
+    if (msg) msg.textContent = r.ok ? 'bootstrap LINKED — docker healthy' : 'bootstrap done but docker not healthy — check docker logs dsh-compute-backend';
+    if (rawEl) {{ rawEl.textContent = JSON.stringify(r, null, 1); rawEl.style.display = 'block'; }}
+    console.log('[Hive] Bootstrap result', r);
+    await refreshSetup();
+  }} catch(e) {{
+    const txt = String(e.message || e);
+    if (txt.includes('bare') || txt.includes('Administrator') || txt.includes('Mount_AI_Drive')) {{
+      if (dockerEl) dockerEl.textContent = 'Needs Admin bare mount first:\\n'
+        + '1) Right-click Mount_AI_Drive.bat → Run as administrator\\n'
+        + '   (or: wsl --mount --vhd E:/dsh_storage.vhdx --bare)\\n'
+        + '2) Then click Bootstrap Docker again (no Admin needed)\\n\\n'
+        + 'Error: ' + txt.slice(0,700);
+      if (msg) msg.textContent = 'needs Admin: run Mount_AI_Drive.bat as Admin, then Bootstrap again';
+      console.warn('[Hive] Bootstrap needs Admin', txt);
+    }} else {{
+      if (msg) msg.textContent = 'bootstrap failed: ' + txt.slice(0,150);
+      if (dockerEl) dockerEl.textContent = 'Bootstrap failed:\\n' + txt.slice(0,1200);
+      console.warn('[Hive] Bootstrap failed', txt);
+    }}
+    if (rawEl) rawEl.style.display = 'none';
+  }}
+}}
+async function testWebUI() {{
+  // kept for compat — merged into refreshStatus (Refresh now does health + WebUI check)
+  return refreshStatus();
+}}
+async function loadDrives() {{
+  const sel = document.getElementById('setup-drive');
+  const vhdxEl = document.getElementById('setup-vhdx');
+  if (!sel) return;
+  try {{
+    const data = await api('/v1/setup/drives');
+    sel.innerHTML = '';
+    for (const d of data.drives) {{
+      const o = document.createElement('option');
+      o.value = d.mount;
+      o.textContent = d.mount + ' — ' + d.free_gb + 'GB free / ' + d.total_gb + 'GB';
+      sel.appendChild(o);
+    }}
+    // No auto-best: leave VHDX as-is (default E:/dsh_storage.vhdx) so user explicitly picks drive for LLM storage
+    sel.addEventListener('change', () => {{
+      const drive = sel.value;
+      let base = drive;
+      if (!base.endsWith('/') && !base.endsWith('\\\\')) base += '/';
+      base = base.replace(/\\\\/g, '/');
+      if (vhdxEl) vhdxEl.value = base + 'dsh_storage.vhdx';
+    }});
+  }} catch(e) {{
+    sel.innerHTML = '<option>auto-detect failed</option>';
+  }}
+}}
+setTimeout(() => {{ try {{ loadSetup(); loadDrives(); }} catch(e) {{}} }}, 900);
 
 /* ---------------- typeahead (hub repos + local library) --------------- */
 let suggestTimer = null;
@@ -706,7 +1172,9 @@ async function hubFiles(repo) {{
 
 async function suggestLocal() {{
   try {{
-    const l = await api('/v1/models/local');
+    let l;
+    if(_libCache.system && (Date.now()-_libCache.ts < 30000)) l={{models: _libCache.system}};
+    else l=await api('/v1/models/local');
     const dl = document.getElementById('local-suggestions');
     dl.innerHTML = '';
     for (const m of l.models) {{
@@ -1282,7 +1750,235 @@ function filterLibrary() {{
     }}
   }};
   filterSelect(engSel);
-  filterSelect(launchSelect);
+  filterSelect(launchSel);
+  // also filter both new panes
+  for (const id of ['local-system','local-linux']) {{
+    const w = document.getElementById(id);
+    if (!w) continue;
+    let vis=0;
+    for (const row of w.children) {{
+      const name=(row.dataset.file||'').toLowerCase();
+      const show=!q||name.includes(q);
+      row.style.display=show?'':'none';
+      if(show) vis++;
+    }}
+  }}
+}}
+function showToast(msg) {{
+  let t=document.getElementById('toast');
+  if(!t){{ t=document.createElement('div'); t.id='toast'; t.className='toast'; document.body.appendChild(t); }}
+  t.textContent=msg;
+  t.style.display='block';
+  t.classList.remove('fade');
+  t.onclick=()=>{{ t.style.display='none'; }};
+  clearTimeout(t._timer);
+  t._timer=setTimeout(()=>{{ t.classList.add('fade'); setTimeout(()=>{{ t.style.display='none'; }},300); }},3000);
+}}
+let _ctxMenu=null;
+function hideContextMenu(){{ if(_ctxMenu){{ _ctxMenu.remove(); _ctxMenu=null; }} }}
+function showContextMenu(x,y,file,location) {{
+  hideContextMenu();
+  const menu=document.createElement('div');
+  menu.className='context-menu';
+  _ctxMenu=menu;
+  const addItem=(label, handler, danger=false)=>{{
+    const it=document.createElement('div');
+    it.className='context-menu-item'+(danger?' danger':'');
+    it.textContent=label;
+    it.onclick=async (e)=>{{ e.stopPropagation(); hideContextMenu(); await handler(); }};
+    menu.appendChild(it);
+  }};
+  const hfUrl='https://huggingface.co/models?search=' + encodeURIComponent(file.split('/').pop().split('\\\\').pop().replace(/\\.gguf$/i,''));
+  addItem('View on Hugging Face', ()=>{{ window.open(hfUrl, '_blank'); }});
+  if(location==='system'){{
+    addItem('Move to Linux (/mnt/dsh_storage/models)', async ()=>{{ await moveToLinux(file); }});
+    addItem('Delete', async ()=>{{ await deleteModel(file,'system'); }}, true);
+  }} else {{
+    addItem('Send back to Windows', async ()=>{{ await moveToWindows(file); }});
+    addItem('Delete', async ()=>{{ await deleteModel(file,'linux'); }}, true);
+  }}
+  menu.style.left=x+'px';
+  menu.style.top=y+'px';
+  document.body.appendChild(menu);
+  // reposition if off-screen
+  const r=menu.getBoundingClientRect();
+  if(r.right>window.innerWidth) menu.style.left=(window.innerWidth-r.width-8)+'px';
+  if(r.bottom>window.innerHeight) menu.style.top=(window.innerHeight-r.height-8)+'px';
+  setTimeout(()=>{{ document.addEventListener('click', hideContextMenu, {{once:true}}); }},10);
+}}
+async function moveToLinux(file) {{
+  if(!confirm('Move ' + file + ' to Linux (/mnt/dsh_storage/models)?\\n\\nThis copies the GGUF via WSL to the Docker volume.')) return;
+  try{{
+    const r=await api('/v1/models/move-to-linux','POST',{{file}});
+    showToast('Moved to Linux: ' + (r.file||file));
+    _libCache.ts=0; _lastRender.system=null; _lastRender.linux=null;
+    // Only refresh the two library panes, not the entire app
+    await Promise.all([loadLibrarySystem(), loadLibraryLinux()]);
+  }} catch(e){{ alert('Move failed: '+String(e)); }}
+}}
+async function moveToWindows(file) {{
+  if(!confirm('Send ' + file + ' back to Windows library?')) return;
+  try{{
+    const r=await api('/v1/models/move-to-windows','POST',{{file}});
+    showToast('Sent to Windows: ' + (r.file||file));
+    _libCache.ts=0; _lastRender.system=null; _lastRender.linux=null;
+    await Promise.all([loadLibrarySystem(), loadLibraryLinux()]);
+  }} catch(e){{ alert('Send back failed: '+String(e)); }}
+}}
+async function deleteModel(file, location) {{
+  if(!confirm('Delete ' + file + ' from ' + location + '?')) return;
+  try{{
+    if(location==='system') await api('/v1/models/local?file='+encodeURIComponent(file),'DELETE');
+    else await api('/v1/models/linux?file='+encodeURIComponent(file),'DELETE');
+    showToast('Deleted ' + file);
+    // UI-only update: remove the row, no full reload
+    const wrapId=location==='system'?'local-system':'local-linux';
+    const wrap=document.getElementById(wrapId);
+    if(wrap) {{
+      for(const row of [...wrap.children]){{
+        if(row.dataset.file===file) row.remove();
+      }}
+      if(!wrap.children.length){{ wrap.textContent='(no .gguf files yet)'; wrap.style.color='#000'; }}
+    }}
+    // Update caches
+    const key=location;
+    if(_libCache[key]) _libCache[key]=_libCache[key].filter(m=>m.file!==file);
+    if(_lastRender[key]) _lastRender[key]=_lastRender[key].filter(m=>m.file!==file);
+    if(window._selectedFile===file) window._selectedFile=null;
+    // Keep hidden old #local in sync
+    const old=document.getElementById('local');
+    if(old && location==='system') old.innerHTML=document.getElementById('local-system').innerHTML;
+  }} catch(e){{ alert(String(e)); }}
+}}
+let _lastRender={{system: null, linux: null}};
+function renderLibrary(wrapId, models, location) {{
+  const wrap=document.getElementById(wrapId);
+  if(!wrap) return;
+  // Avoid flicker: if models are the same as last render, skip
+  const cacheKey=location;
+  const last=_lastRender[cacheKey];
+  const same=last && last.length===models.length && last.every((m,i)=>m.file===models[i].file && m.size_gb===models[i].size_gb);
+  if(same) {{
+    // Just restore selection without re-rendering
+    if(window._selectedFile) {{
+      for(const r of wrap.children) r.classList.toggle('selected', r.dataset.file===window._selectedFile);
+    }}
+    return;
+  }}
+  _lastRender[cacheKey]=models.map(m=>({{file:m.file, size_gb:m.size_gb}}));
+  wrap.innerHTML='';
+  if(!models.length){{ wrap.textContent='(no .gguf files yet)'; wrap.style.color='#000'; return; }}
+  for(const m of models){{
+    const row=document.createElement('div');
+    row.className='librow';
+    row.dataset.file=m.file;
+    const label=document.createElement('span');
+    const short=m.file.split('/').pop().split('\\\\').pop();
+    label.textContent=`${{short}} — ${{m.size_gb}} GB`;
+    // tooltip
+    const arch=m.architecture||m.gguf_metadata?.['general.architecture']||m.ggufMetadata?.['general.architecture']||'—';
+    const quant=m.quantization||m.gguf_metadata?.quantization||m.ggufMetadata?.quantization||'—';
+    const ctx=m.context_length??m.contextLength??m.gguf_metadata?.context_length??m.ggufMetadata?.context_length??(()=>{{ const g=m.gguf_metadata||m.ggufMetadata||{{}}; for(const k in g) if(k.endsWith('.context_length')) return g[k]; return '—'; }})();
+    const size=m.size_gb!=null?`${{m.size_gb}} GB`:(m.sizeGb!=null?`${{m.sizeGb}} GB`:'—');
+    const mod=m.modified||m.lastModified||'—';
+    row.title=`${{arch}} · ${{quant}} · ${{ctx}} · ${{size}} · ${{mod}}`;
+    row.addEventListener('click', (e)=>{{
+      // left click selects
+      if(e.button!==0) return;
+      const launchSelect=document.getElementById('launch-model-select');
+      if(launchSelect){{ launchSelect.value=m.file; for(const o of launchSelect.options) if(o.value===m.file){{o.hidden=false; o.style.display='';}} }}
+      window._selectedFile=m.file;
+      // update selection visuals for both panes
+      for(const id of ['local-system','local-linux']) {{
+        const w=document.getElementById(id);
+        if(!w) continue;
+        for(const r of w.children) r.classList.toggle('selected', r.dataset.file===m.file);
+      }}
+    }});
+    row.addEventListener('contextmenu', (e)=>{{
+      e.preventDefault();
+      showContextMenu(e.clientX, e.clientY, m.file, location);
+    }});
+    // restore selection if this is the selected file
+    if(window._selectedFile && window._selectedFile===m.file) row.classList.add('selected');
+    // long-press visual
+    let pt=null;
+    const sp=(on)=>row.classList.toggle('pressed',on);
+    row.addEventListener('mousedown',()=>{{ pt=setTimeout(()=>sp(true),400); }});
+    row.addEventListener('mouseup',()=>{{ clearTimeout(pt); sp(false); }});
+    row.addEventListener('mouseleave',()=>{{ clearTimeout(pt); sp(false); }});
+    wrap.appendChild(row);
+    row.appendChild(label);
+    // keep row as flex with label only; context menu handles actions
+  }}
+}}
+async function loadLibrarySystem() {{
+  const t0=performance.now();
+  const wrapSys=document.getElementById('local-system');
+  const isCached = _libCache.system && (Date.now() - _libCache.ts < 30000);
+  if(wrapSys && !isCached) wrapSys.textContent='loading…';
+  console.log('loadLibrarySystem START', new Date().toISOString(), isCached?'cached':'fetch');
+  try{{
+    const ctrl=new AbortController(); const to=setTimeout(()=>ctrl.abort(), 8000);
+    const l=await api('/v1/models/local', 'GET', null, ctrl.signal).catch(e=>{{ clearTimeout(to); throw e; }});
+    clearTimeout(to);
+    console.log('loadLibrarySystem FETCH', (performance.now()-t0).toFixed(0)+'ms', l.models?.length+' models');
+    const pathInput=document.getElementById('library-path');
+    const pathNote=document.getElementById('library-path-note');
+    if(l.models_dir) {{
+      if(pathInput && !pathInput.value) pathInput.value=l.models_dir;
+      if(pathNote) pathNote.textContent=`(${{l.models_dir}})`;
+    }}
+    // also populate engine selects — preserve selection
+    const launchSelect=document.getElementById('launch-model-select');
+    const engSel=document.getElementById('eng-model');
+    const prevSel=window._selectedFile || (launchSelect?launchSelect.value:'');
+    if(launchSelect) launchSelect.innerHTML='<option value="">— choose local model —</option>';
+    if(engSel) engSel.innerHTML='<option value="">— choose local model —</option>';
+    for(const m of l.models) {{
+      const short=m.file.split('/').pop().split('\\\\').pop();
+      if(launchSelect) {{
+        const o=document.createElement('option'); o.value=m.file; o.textContent=short; launchSelect.appendChild(o);
+        if(engSel){{ const oe=document.createElement('option'); oe.value=m.file; oe.textContent=short; engSel.appendChild(oe); }}
+      }}
+    }}
+    // restore previous selection if still valid
+    if(prevSel && l.models.some(m=>m.file===prevSel)) {{
+      if(launchSelect) launchSelect.value=prevSel;
+      window._selectedFile=prevSel;
+    }} else if(window._selectedFile && !l.models.some(m=>m.file===window._selectedFile)) {{
+      // selected file no longer exists (deleted) — clear
+      window._selectedFile=null;
+      if(launchSelect) launchSelect.value='';
+    }}
+    _libCache.system=l.models; _libCache.ts=Date.now();
+    renderLibrary('local-system', l.models, 'system');
+    filterLibrary();
+    // keep hidden old #local in sync for filter
+    const old=document.getElementById('local');
+    if(old){{ old.innerHTML=document.getElementById('local-system').innerHTML; }}
+  }} catch(e){{ console.error('system fetch failed',e); const w=document.getElementById('local-system'); if(w) w.textContent='load failed: '+String(e).slice(0,200); }}
+}}
+async function loadLibraryLinux() {{
+  const t0=performance.now();
+  const wrap=document.getElementById('local-linux');
+  const isCachedLinux = _libCache.linux && (Date.now() - _libCache.ts < 30000);
+  if(wrap && !isCachedLinux) wrap.textContent='loading…';
+  console.log('loadLibraryLinux START', new Date().toISOString(), isCachedLinux?'cached':'fetch');
+  try{{
+    const ctrl=new AbortController(); const to=setTimeout(()=>ctrl.abort(), 8000);
+    const l=await api('/v1/models/linux', 'GET', null, ctrl.signal).catch(e=>{{ clearTimeout(to); throw e; }});
+    clearTimeout(to);
+    console.log('loadLibraryLinux FETCH', (performance.now()-t0).toFixed(0)+'ms', (l.models||[]).length+' models', l.mounted?'mounted':'not mounted');
+    _libCache.linux=l.models||[]; _libCache.ts=Date.now();
+    renderLibrary('local-linux', l.models||[], 'linux');
+    // Keep filter in sync
+    filterLibrary();
+    if(l.error) console.log('linux models', l.error);
+  }} catch(e){{ console.error('linux fetch failed',e); if(wrap) wrap.textContent='load failed: '+String(e).slice(0,200); }}
+}}
+async function loadLibrary() {{
+  await Promise.all([loadLibrarySystem(), loadLibraryLinux()]);
 }}
 
 let _currentAgentPreset = null;
@@ -1752,8 +2448,11 @@ async function engineAuto() {{
       preset = data.load_options || data.preset || data;
       if (preset.gpu_layers == null && preset.gpu_layers !== 0) throw new Error('no preset');
     }} catch (_e) {{
-      // Client-side: GET /v1/server/status hardware + GET /v1/models/local size_gb + gguf-metadata
-      const [status, local] = await Promise.all([api('/v1/server/status'), api('/v1/models/local')]);
+      // Client-side: use cached _libCache if fresh, else fetch
+      let local;
+      if(_libCache.system && (Date.now()-_libCache.ts < 30000)) local={{models: _libCache.system}};
+      else local=await api('/v1/models/local');
+      const status=await api('/v1/server/status');
       const hardware = status.hardware || status;
       const entry = (local.models||[]).find(m=>m.file===selFile);
       const size_gb = entry ? Number(entry.size_gb)||0 : 0;
@@ -1858,6 +2557,12 @@ async function getFitHardware() {{
 }}
 async function getFitModels() {{
   if (_fitModelsCache && Date.now()-_fitModelsCache.ts < 5000) return _fitModelsCache.data;
+  // Use _libCache if fresh (avoid extra fetch)
+  if(_libCache.system && (Date.now()-_libCache.ts < 30000)) {{
+    const data={{models_dir: document.getElementById('library-path')?.value||'', models: _libCache.system}};
+    _fitModelsCache={{data, ts: Date.now()}};
+    return data;
+  }}
   const data = await api('/v1/models/local');
   _fitModelsCache = {{data, ts: Date.now()}};
   return data;
@@ -2218,132 +2923,11 @@ async function refresh() {{
   api('/v1/server/log?tail=30').then(l => {{
     if (l.lines.length) show('srvlog', l.lines.join('\\n'));
   }}).catch(() => {{}});
-  api('/v1/models/local').then(l => {{
-    console.log('local fetch ok', l.models_dir, l.models?.length);
-    const pathInput = document.getElementById('library-path');
-    const pathNote = document.getElementById('library-path-note');
-    if (l.models_dir) {{
-      if (!pathInput.value) pathInput.value = l.models_dir;
-      pathNote.textContent = `(${{l.models_dir}})`;
-    }}
-    const wrap = document.getElementById('local');
-    const engDisplay = document.getElementById('eng-model-display');
-    const launchSelect = document.getElementById('launch-model-select');
-    const engNote = document.getElementById('eng-model-note');
-    if (launchSelect) launchSelect.innerHTML = '<option value="">— choose local model —</option>';
-    const engModelSel = document.getElementById('eng-model');
-    if (engModelSel) engModelSel.innerHTML = '<option value="">— choose local model —</option>';
-    for (const m of l.models) {{
-      const shortName = m.file.split('/').pop().split('\\\\').pop();
-      if (launchSelect) {{
-        const o2 = document.createElement('option');
-        o2.value = m.file;
-        o2.textContent = shortName;
-        if (engModelSel) {{ const oE = document.createElement('option'); oE.value = m.file; oE.textContent = shortName; engModelSel.appendChild(oE); }}
-        launchSelect.appendChild(o2);
-      }}
-    }}
-    const prevLaunch = launchSelect ? launchSelect.value : '';
-    if (launchSelect) {{
-      if (prevLaunch && l.models.some(m => m.file === prevLaunch)) launchSelect.value = prevLaunch;
-      else if (l.models.length === 1) launchSelect.value = l.models[0].file;
-    }}
-    const updateEngModel = () => {{
-      const v = window._selectedFile || (launchSelect ? launchSelect.value : '');
-      const short = v ? v.split('/').pop().split('\\\\').pop() : '—';
-      if (engDisplay) engDisplay.textContent = short;
-      if (engNote) engNote.textContent = v ? `selected: ${{short}}` : '';
-      // Keep launchSelect in sync with _selectedFile
-      if (launchSelect && v && launchSelect.value !== v) {{
-        // Ensure option exists even if filtered
-        let opt = [...launchSelect.options].find(o=>o.value===v);
-        if (!opt) {{
-          opt = document.createElement('option'); opt.value=v; opt.textContent=short; launchSelect.appendChild(opt);
-        }}
-        launchSelect.value = v;
-      }}
-      for (const row of wrap.children) {{
-        const isSel = row.dataset.file === v;
-        row.classList.toggle('selected', isSel);
-        row.style.background = isSel ? '#000000' : '';
-        row.style.color = isSel ? '#FFDD00' : '';
-        row.style.borderColor = isSel ? '#FFDD00' : '';
-        row.style.boxShadow = isSel ? '0 0 10px rgba(255,221,0,0.5)' : '';
-      }}
-      const launchModel = document.getElementById('model');
-      if (launchModel && v) launchModel.value = v;
-      console.log('updateEngModel v', v, 'selected', v ? 'yes' : 'none');
-      try {{ if (typeof updateFit==='function') updateFit(); }} catch(e){{}}
-    }};
-    if (launchSelect) launchSelect.onchange = () => {{ window._selectedFile = launchSelect.value || null; updateEngModel(); try{{ if(typeof updateFit==='function') updateFit(); }}catch(e){{}} }};
-    wrap.innerHTML = '';
-    if (!l.models.length) {{
-      wrap.textContent = '(no .gguf files yet)';
-      if (engNote) engNote.textContent = '';
-      return;
-    }}
-    for (const m of l.models) {{
-      const row = document.createElement('div');
-      row.className = 'librow';
-      row.dataset.file = m.file;
-      const label = document.createElement('span');
-      const short = m.file.split('/').pop().split('\\\\').pop();
-      label.textContent = `${{short}} — ${{m.size_gb}} GB`;
-      const del = document.createElement('button');
-      del.textContent = 'delete';
-      del.title = 'remove from disk';
-      del.addEventListener('click', async (e) => {{
-        e.stopPropagation();
-        if (!confirm('Delete ' + m.file + ' from disk?')) return;
-        try {{
-          await api('/v1/models/local?file=' + encodeURIComponent(m.file),
-                    'DELETE');
-          refresh();
-        }} catch (e) {{ alert(String(e)); }}
-      }});
-      // Native tooltip with gguf-metadata + sizeGb + lastModified
-      const arch = m.architecture || m.gguf_metadata?.['general.architecture'] || m.ggufMetadata?.['general.architecture'] || '—';
-      const quant = m.quantization || m.gguf_metadata?.quantization || m.ggufMetadata?.quantization || '—';
-      const ctx = m.context_length ?? m.contextLength ?? m.gguf_metadata?.context_length ?? m.ggufMetadata?.context_length ?? (() => {{
-        const gm = m.gguf_metadata || m.ggufMetadata || {{}};
-        for (const k in gm) {{ if (k.endsWith('.context_length')) return gm[k]; }}
-        return '—';
-      }})();
-      const size = m.size_gb != null ? `${{m.size_gb}} GB` : (m.sizeGb != null ? `${{m.sizeGb}} GB` : '—');
-      const mod = m.modified || m.lastModified || '—';
-      row.title = `${{arch}} · ${{quant}} · ${{ctx}} · ${{size}} · ${{mod}}`;
-      // Click row = select model (also long-press visual)
-      let pressTimer = null;
-      const setPressed = (on) => row.classList.toggle('pressed', on);
-      row.addEventListener('mousedown', () => {{ pressTimer = setTimeout(()=>setPressed(true), 400); }});
-      row.addEventListener('mouseup', () => {{ clearTimeout(pressTimer); setPressed(false); }});
-      row.addEventListener('mouseleave', () => {{ clearTimeout(pressTimer); setPressed(false); }});
-      row.addEventListener('touchstart', () => {{ pressTimer = setTimeout(()=>setPressed(true), 400); }}, {{passive:true}});
-      row.addEventListener('touchend', () => {{ clearTimeout(pressTimer); setPressed(false); }});
-      row.addEventListener('click', (e) => {{
-        hideHover();
-        e.stopPropagation();
-        console.log('row click', m.file);
-        if (launchSelect) {{
-          launchSelect.value = m.file;
-          // Ensure the option is visible even if filtered
-          for (const opt of launchSelect.options) {{ if (opt.value === m.file) {{ opt.hidden = false; opt.style.display = ''; }} }}
-        }}
-        if (window._selectedFile !== m.file) window._selectedFile = m.file;
-        else window._selectedFile = null; // toggle off if same file clicked again? No, keep selected
-        // Actually, toggle behaviour: if already selected, keep it selected (don't unselect)
-        // So we set _selectedFile to m.file and call update
-        window._selectedFile = m.file;
-        updateEngModel();
-      }});
-      row.appendChild(label);
-      row.appendChild(del);
-      wrap.appendChild(row);
-    }}
-    // Restore selection from _selectedFile if exists
-    if (window._selectedFile && launchSelect) launchSelect.value = window._selectedFile;
-    updateEngModel();
-  }}).catch(e => {{ console.error('local fetch failed', e); const w=document.getElementById('local'); if(w) w.textContent = 'load failed: ' + String(e).slice(0,200); }});
+  // Library is loaded on demand when tab-library is clicked, not on every refresh
+  // Hugging Face models downloaded on Windows (via HF API) are regular GGUFs in the System library.
+  // They appear in System. Right-click → Move to Linux copies them to /mnt/dsh_storage/models via WSL
+  // (sudo cp /mnt/c/... → /mnt/dsh_storage/models) so Docker can use them. Linux models are listed
+  // separately and can be sent back or deleted. Both locations are tracked.
   api('/v1/models/hub/downloads').then(d => {{
     const lines = d.downloads.map(j => `${{j.filename}}: ${{j.state}} (${{j.elapsed_s}}s)`);
     if (lines.length) show('downloads', lines.join('\\n'));
@@ -2402,11 +2986,20 @@ async function refreshProcesses() {{
 }}
 refreshProcesses();
 setInterval(refreshProcesses, 8000);
-refresh();
+setTimeout(()=>{{ try{{ refresh(); }}catch(e){{ console.error(e); }} }}, 800);
 setInterval(refresh, 15000);
 loadHiveDefaults();
+// Library tab loads on demand — not on initial refresh to keep UI responsive
+console.log('studio ready, tabs active');
 document.getElementById('chatin').addEventListener('blur',
   () => setTimeout(() => {{ document.getElementById('sug-chat').innerHTML = ''; }}, 150));
 document.getElementById('chatin').focus();
+// Refresh status when tab becomes visible again after idle (library only on click)
+document.addEventListener('visibilitychange', ()=>{{
+  if(document.visibilityState==='visible'){{
+    refresh().catch(e=>console.error(e));
+    refreshProcesses().catch(e=>console.error(e));
+  }}
+}});
 </script>
 </body></html>"""

@@ -123,10 +123,20 @@ label.inline input[type="checkbox"] { vertical-align: middle; }
 details { margin: .3rem 0; }
 summary { cursor: pointer; color: #456; font-size: .88rem; }
 #prov-list input { margin: .12rem .15rem; }
-.liblist .librow { display: flex; justify-content: space-between; align-items: center; gap: .6rem; background: #FFB703; border: 1.5px solid #000000; border-radius: 6px; padding: .35rem .6rem; margin: .25rem 0; font-size: .88rem; color: #000000; cursor: pointer; transition: background .12s, color .12s, border-color .12s, box-shadow .12s, transform .08s; }
-.liblist .librow:hover { background: #FFD54F; }
-.liblist .librow.selected { background: #000000; color: #FFDD00; border-color: #FFDD00; box-shadow: 0 0 10px rgba(255,221,0,0.5); }
-.liblist .librow.pressed { background: #000000; color: #FFDD00; border-color: #FFDD00; transform: scale(0.98); box-shadow: 0 0 14px rgba(255,221,0,0.6); }
+/* Local Library: yellow container holds sub-tabs + lists; sub-tabs same as top-level */
+#tab-library .lib-container { background: #FFB703; border: 1.5px solid #000; border-radius: 8px; padding: .6rem; }
+#tab-library .lib-container .tabs { background: transparent; border: none; border-radius: 0; padding: 0; margin-bottom: .6rem; }
+#tab-library .lib-container .tabs .lib-tab { border: 1.5px solid #000; background: #000; color: #FFDD00; border-radius: 6px 6px 0 0; padding: .35rem .6rem; cursor: pointer; font: inherit; }
+#tab-library .lib-container .tabs .lib-tab.active { background: #FFB703; color: #000; border-bottom-color: #FFB703; font-weight: 600; }
+#tab-library .lib-tabpane .note { color: #000; }
+#tab-library .lib-container .lib-tabpane { background: transparent; border: none; border-radius: 0; padding: 0; margin: 0; }
+#local-system, #local-linux { color: #000; }
+#local-system.liblist, #local-linux.liblist { color: #000; }
+.lib-tabpane { background: #FFB703; border: 1.5px solid #000; border-radius: 8px; padding: .6rem; margin-top: .5rem; }
+.liblist .librow { display: flex; justify-content: space-between; align-items: center; gap: .6rem; background: #000000; border: 1.5px solid #000000; border-radius: 6px; padding: .35rem .6rem; margin: .25rem 0; font-size: .88rem; color: #FFFFFF; cursor: pointer; transition: background .12s, color .12s, border-color .12s, box-shadow .12s, transform .08s; }
+.liblist .librow:hover { background: #1a1a1a; border-color: #333; }
+.liblist .librow.selected { background: #FFB703; color: #000000; border-color: #000000; box-shadow: 0 0 10px rgba(0,0,0,0.3); }
+.liblist .librow.pressed { background: #FFB703; color: #000000; border-color: #000000; transform: scale(0.98); box-shadow: 0 0 14px rgba(0,0,0,0.4); }
 .liblist .librow.selected button { background: #FFB703; color: #000000; border-color: #000000; }
 .liblist .librow.loaded { outline: 2px solid #157a3e; }
 .librow button { padding: .05rem .5rem; }
@@ -270,4 +280,12 @@ pre { background: #FFB703; color: #000000; border: 1.5px solid #000000; }
 @media (max-width: 900px) {
   .grid-2col { grid-template-columns: 1fr; }
 }
+/* ---- Toast (delete confirmation, 3s at top, click to dismiss) ---- */
+.toast { position: fixed; top: 1.5rem; left: 50%; transform: translateX(-50%); background: #000; color: #FFDD00; border: 1.5px solid #FFDD00; padding: .6rem 1.2rem; border-radius: 8px; font-weight: 600; z-index: 1000; opacity: 1; transition: opacity .3s ease; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,.4); }
+.toast.fade { opacity: 0; }
+/* ---- Context menu (right-click on models) ---- */
+.context-menu { position: fixed; background: #000; border: 1.5px solid #FFDD00; border-radius: 6px; padding: .3rem 0; z-index: 1000; min-width: 180px; box-shadow: 0 4px 12px rgba(0,0,0,.4); }
+.context-menu-item { padding: .45rem .8rem; cursor: pointer; color: #FFDD00; font-size: .88rem; }
+.context-menu-item:hover { background: #FFB703; color: #000; }
+.context-menu-item.danger:hover { background: #b3372c; color: #fff; }
 

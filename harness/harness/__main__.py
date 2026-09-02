@@ -254,41 +254,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     app = create_app(**kwargs)
 
-    # Auto-start (or adopt) the local llama.cpp server when a model is
-    # available, reusing the saved launch settings from the engine profile
-    # (--no-auto-start opts out). Mirrors POST /v1/server/start. Adoption
-    # walks every llama-server port from --llama-port upward so orphans from
-    # a previous run are re-registered instead of fought.
-    if not args.no_auto_start and not args.mock:
-        manager = app.state.models
-        try:
-            local = manager.list_local()
-            port_busy = manager.status()["running"]
-            if port_busy:
-                info = manager.start(model=None, port=args.llama_port)
-                app.state.register_local(info, key=info["key"])
-                print(f"auto-start: adopted llama-server on port {info['port']}")
-            elif local:
-                newest = local[0]["file"]
-                load_options = {}
-                try:
-                    engine = app.state.harness.engines.resolve("local")
-                    load_options = dict(engine.load_options or {})
-                except LookupError:
-                    pass
-                print(f"auto-start: launching llama-server with {newest}")
-                info = manager.start(
-                    model=newest, port=args.llama_port,
-                    ctx_size=int(load_options.get("context", 8192)),
-                    ngl=int(load_options.get("gpu_layers", 999)),
-                    extra_args=launch_extra_args(load_options),
-                )
-                app.state.register_local(info, load_options=load_options,
-                                         key=info["key"])
-                print(f"auto-start: serving http://{manager.host}:{info['port']} "
-                      f"(model: {info.get('model')})")
-        except Exception as exc:  # noqa: BLE001 - never block boot on this
-            print(f"auto-start: skipped ({exc})")
+    # Auto-start removed: studio no longer loads an LLM on boot.
+    # Models are started explicitly via POST /v1/server/start or the UI Load button.
+    # The --no-auto-start flag is kept for compatibility but is now the default.
 
     # Detached instances record every managed server so --stop can take the
     # whole stack down (taskkill /T cannot reach the grandchildren).

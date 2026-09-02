@@ -417,6 +417,8 @@ class LlamaServerManager:
         self._lock = threading.RLock()
         self._instances: dict[str, ServerInstance] = {}
         self._downloads: dict[str, DownloadJob] = {}
+        self._local_cache: list[dict] | None = None
+        self._local_cache_ts: float = 0.0
 
     # ------------------------------------------------------------------
     # local library
@@ -433,7 +435,11 @@ class LlamaServerManager:
         text = candidates[0].read_text(encoding="utf-8", errors="replace")
         return text.splitlines()[-max(1, tail):]
 
-    def list_local(self) -> list[dict]:
+    def list_local(self, use_cache: bool = True) -> list[dict]:
+        # Cache for 30s to avoid re-reading GGUF headers on every poll (refresh every 15s + tab switch)
+        if use_cache and self._local_cache is not None and (time.time() - self._local_cache_ts) < 30.0:
+            return self._local_cache
+        t0=time.time()
         entries = []
         for p in sorted(self.models_dir.rglob("*.gguf")):
             try:
@@ -472,7 +478,15 @@ class LlamaServerManager:
                 entry["gguf_metadata"] = meta
                 entry["ggufMetadata"] = meta
             entries.append(entry)
-        return sorted(entries, key=lambda e: e["modified"], reverse=True)
+        out=sorted(entries, key=lambda e: e["modified"], reverse=True)
+        self._local_cache=out
+        self._local_cache_ts=time.time()
+        print(f"list_local: {len(out)} models in {(self._local_cache_ts-t0):.2f}s from {self.models_dir}")
+        return out
+
+    def invalidate_cache(self) -> None:
+        self._local_cache=None
+        self._local_cache_ts=0.0
 
     def import_local_path(self, folder: str) -> dict:
         """Link an external folder into the library without copying (instant).
@@ -764,7 +778,10 @@ class LlamaServerManager:
         log_path = self.log_dir / f"llama_server_{use_port}.log"
         log_handle = open(log_path, "ab")
         try:
-            proc = self.spawner(cmd, stdout=log_handle, stderr=subprocess.STDOUT)
+            sp_kwargs: dict = {"stdout": log_handle, "stderr": subprocess.STDOUT}
+            if os.name == "nt":
+                sp_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+            proc = self.spawner(cmd, **sp_kwargs)
         finally:
             log_handle.close()
 
