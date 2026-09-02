@@ -781,7 +781,14 @@ class LlamaServerManager:
             sp_kwargs: dict = {"stdout": log_handle, "stderr": subprocess.STDOUT}
             if os.name == "nt":
                 sp_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-            proc = self.spawner(cmd, **sp_kwargs)
+            try:
+                proc = self.spawner(cmd, **sp_kwargs)
+            except TypeError as e:
+                if "creationflags" in str(e):
+                    sp_kwargs.pop("creationflags", None)
+                    proc = self.spawner(cmd, **sp_kwargs)
+                else:
+                    raise
         finally:
             log_handle.close()
 
