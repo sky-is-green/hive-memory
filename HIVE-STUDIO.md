@@ -1,8 +1,8 @@
-# HiveBench (Studio Console)
+# Studio Console
 
 [![CI](https://github.com/sky-is-green/hive-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/sky-is-green/hive-memory/actions/workflows/ci.yml)
 
-**HiveBench** is the Studio Console for the hive-memory stack: one local web
+**Studio Console** is the operator UI for the hive-memory stack: one local web
 UI that takes you from a bare machine to a served model — GGUF library,
 Linux/Docker setup, fit math, engine profiles, agent profiles, Hive tuning,
 live chat, and the evaluation suite — all against backends you host.
