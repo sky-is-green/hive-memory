@@ -83,6 +83,32 @@ def _runtime_env() -> dict:
     return env
 
 
+def _selected_preset_cordis() -> Optional[str]:
+    """Resolve the currently selected agent preset to a cordis file path for DeepSeekHarness.
+
+    Reads ``harness_state/selected_agent_preset.txt`` (written by ``POST /v1/agent-presets/selected``)
+    and searches shipped + user roots for ``<id>/agent.cordis.yml``. Returns ``None`` to use the
+    bundled default when no selection or file is found. This correctly passes the chosen
+    preset's tool composition to the LLM via ``DeepSeekHarness(cordis=...)`` -> ``DSH_CORDIS_CONFIG``.
+    """
+    try:
+        p = REPO_ROOT / "harness_state" / "selected_agent_preset.txt"
+        pid = p.read_text(encoding="utf-8").strip() if p.is_file() else "standard"
+        if not pid or not re.match(r"^[a-z0-9][a-z0-9-]*$", pid):
+            return None
+        candidates = [
+            REPO_ROOT.parent / "hivebench-studio" / "packages" / "preset" / "agent-presets" / "presets" / pid / "agent.cordis.yml",
+            REPO_ROOT.parent / "hivebench-studio" / "apps" / "cli" / "config" / "agent-presets" / pid / "agent.cordis.yml",
+            Path.home() / ".dsh" / ".agent-presets" / pid / "agent.cordis.yml",
+        ]
+        for cand in candidates:
+            if cand.is_file():
+                return str(cand)
+    except Exception:
+        pass
+    return None
+
+
 class DshAgentService:
     """Persistent dsh runtime + per-conversation agent sessions.
 
@@ -193,7 +219,8 @@ class DshAgentService:
         return "full-access (auto-approve; the runtime's own permissions apply)"
 
     def _ensure(self, base_url: str, api_key: str, model: str):
-        key = (base_url, api_key, model)
+        cordis = _selected_preset_cordis()
+        key = (base_url, api_key, model, cordis)
         with self._lock:
             if self._harness is not None and self._target == key:
                 return self._harness
@@ -222,6 +249,7 @@ class DshAgentService:
                 cwd=str(self.default_cwd),
                 session_root=str(self.session_root),
                 env=_runtime_env(),
+                cordis=cordis,
             )
             self._target = key
             return self._harness

@@ -13,6 +13,10 @@ body {
   /* palette lives at bottom; layout only here */
 }
 h1 { margin: 0 0 .8rem 0; flex: 0 0 auto; }
+.titlerow { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin: 0 0 .8rem 0; }
+.titlerow h1 { margin: 0; }
+.titlebtns { display: inline-flex; gap: .3rem; }
+.sessbtns { display: inline-flex; gap: .4rem; align-items: center; }
 section {
   background: #fff;
   border-radius: 10px;
@@ -81,6 +85,29 @@ section {
   .col { overflow: visible; flex: none; min-height: auto; }
   .mid { order: -1; min-height: 75vh; overflow: visible; flex: none; }
   .chatpane .chatlog { min-height: 50vh; }
+  /* tabs: smaller text + boxes so all fit, wrap if needed, stick to top */
+  .tabs { flex-wrap: wrap; gap: .15rem; position: sticky; top: 0; z-index: 50; background: #FFB703; padding: .25rem 0; }
+  .tab { font-size: .72rem; padding: .25rem .45rem; }
+  /* agent profiles: name stays next to the radio, buttons wrap below */
+  #agent-presets-list .librow { flex-wrap: wrap; }
+  #agent-presets-list .librow > div { flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 6px; }
+  /* engines model picker: keep inside its box */
+  .engine-group { overflow: hidden; }
+  .engine-group select, .engine-group input { max-width: 100%; box-sizing: border-box; }
+  /* composer: input full row above the buttons */
+  .composer { flex-wrap: wrap; }
+  .composer-input { flex: 1 1 100%; min-width: 0; }
+  #chatin { width: 100%; box-sizing: border-box; }
+  .statusbar { font-size: .78rem; }
+  /* setup children (Drive/VHDX/Size/Mount): shrink labels, wrap inside box */
+  #setup-box ul li > div { flex-wrap: wrap; }
+  #setup-box ul li > div > div:first-child { flex: 0 0 88px !important; font-size: .78rem; }
+  #setup-box ul li > div > div:last-child { flex: 1 1 150px; min-width: 0; }
+  #setup-box input, #setup-box select { max-width: 100%; box-sizing: border-box; }
+  #setup-vhdx { width: 100%; }
+  /* launch consoles + pres: no sideways scroll */
+  #launch-consoles pre, .chatpane pre { max-width: 100%; overflow-x: auto; }
+  #proc-manager table { font-size: .75rem; }
 }
 /* --- rest: keep original component styles (unchanged) --- */
 input, button, select { font: inherit; padding: .35rem .6rem; margin: .15rem .3rem .15rem 0; }
@@ -169,6 +196,9 @@ summary { cursor: pointer; color: #456; font-size: .88rem; }
 .chatpane { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .chat-head { display: flex; justify-content: space-between; align-items: center; gap: .6rem; flex: none; margin: .2rem 0 .6rem; }
 .chat-head h2 { margin: 0; font-size: 1.05rem; white-space: nowrap; }
+.statusbar { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; font-size: .85rem; color: #FFDD00; background: rgba(255,255,255,.04); border: 1px solid rgba(255,221,0,.18); border-radius: 6px; padding: .35rem .6rem; }
+.statusbar .sep { opacity: .5; }
+#chat-model, #chat-profile { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .chat-controls { display: flex; align-items: center; gap: .45rem; flex-wrap: wrap; justify-content: flex-end; }
 .composer { display: flex; gap: .4rem; align-items: center; margin-top: auto; flex: none; }
 .composer-input { flex: 1 1 auto; display: flex; min-width: 0; }

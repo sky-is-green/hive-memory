@@ -279,9 +279,8 @@ def render_server_page() -> str:
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"><meta http-equiv="Pragma" content="no-cache"><meta http-equiv="Expires" content="0"><title>Studio server &amp; models</title>
 <style>{_get_server_css()}</style><style>input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{{-webkit-appearance:none;margin:0}}input[type=number]{{-moz-appearance:textfield;appearance:textfield}}</style></head><body>
-<div id="top-right-status" title="How: GET /v1/server/status hardware poll + process check. Does: Shows loaded model health. Changing: Green=ready, else Start needed." style="position:absolute; top:1rem; right:1.2rem; background:#000; color:#FFDD00; border:2px solid #000; padding:.45rem .9rem; border-radius:8px; font-weight:700; font-size:.88rem; z-index:10; max-width:40vw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Launch: No model loaded</div>
-<h1>Hive Studio console</h1>
-<p style="margin:.3rem 0"><button id="afkbtn" onclick="toggleAfk(this)" title="How: toggleAfk sets HIVE-MODE.json. Does: QUEEN autonomy (GREEN/YELLOW auto, RED contained). Changing: On queues pushes/merges until return.">AFK</button> <a href="/runs"><button>Runs →</button></a> <a href="/docs"><button>API docs</button></a></p>
+<div id="drive-mismatch-toast" onclick="this.style.display='none'" title="Click to dismiss — fix Drive/VHDX to match" style="display:none; position:fixed; top:0; left:50%; transform:translateX(-50%); background:#cc0000; color:#FFDD00; border:3px solid #ff1a1a; border-top:none; padding:.6rem 1.2rem; border-radius:0 0 10px 10px; font-weight:800; z-index:9999; cursor:pointer; max-width:90vw; text-align:center; box-shadow:0 4px 16px rgba(204,0,0,.6), 0 2px 8px rgba(0,0,0,.7); text-shadow:0 1px 2px rgba(0,0,0,.5)">Drive Letter and VHDX Driver Letter must match or mismatch!</div>
+<div class="titlerow"><h1>Hive Studio console</h1><span class="titlebtns"><a href="/runs"><button>Runs →</button></a> <a href="/docs"><button>API docs</button></a></span></div>
 <form style="display:inline" onsubmit="event.preventDefault(); return false"><input id="researchq" placeholder="deep-research question..." size="30" autocomplete="off" title="How: researchAdd queues to RESEARCH-QUEUE.md. Does: Deep research task (Queen only). Changing: Adds entry, not instant." onkeydown="if (event.key === &quot;Enter&quot;) researchAdd(this)"> <button id="researchsubmit" onclick="researchAdd(this)">Research</button> <span id="researchcount" class="meta" title="Queues a deep-research question for QUEEN. Execution is master-only; reports land in RESEARCH/&lt;slug&gt;.md and are summarized on wake."></span></form>
 
 <div class="grid">
@@ -290,7 +289,8 @@ def render_server_page() -> str:
 <div class="col">
 <div class="tabs">
 <button class="tab" data-tab="tab-setup">Linux/Docker setup</button>
-<button class="tab" data-tab="tab-agent">Agent</button>
+<button class="tab" data-tab="tab-syscalc">Sys Calc</button>
+<button class="tab" data-tab="tab-agent">Agent Profiles</button>
 <button class="tab" data-tab="tab-engines">Engines</button>
 <button class="tab" data-tab="tab-library">Local Library</button>
 <button class="tab" data-tab="tab-hive">Hive</button>
@@ -303,7 +303,7 @@ def render_server_page() -> str:
 <div id="tab-setup" class="tabpane" style="display:none">
 <section>
 <h2 style="margin-top:0">Docker Setup — WebUI ↔ Linux model <span class="note">ROCm + VHDX bare</span></h2>
-<div class="note" style="margin-bottom:.6rem; line-height:1.5">For extra large models (DeepSeek v4 or similar). Your chat app sends prompts to a Linux AI server that loads the model from a virtual drive <code>E:/dsh_storage.vhdx</code> (shown as <code>/mnt/dsh_storage</code> inside Linux). <span title="How: WebUI OPENAI_API_BASE_URLS includes http://dsh-compute-backend:8000/v1 (hivebench-studio defaults :3000 → :8000); Docker runs custom-dsh-rocm-backend with /dev/kfd + HSA 11.0.0 + FLASH3 FP8 on /mnt/dsh_storage/models. Does: Serves large model with tiered spill 20 VRAM+24 RAM+NVMe. Changing: No user action — Bootstrap sets it up." style="background:#000;color:#FFDD00;padding:.2rem .5rem;border-radius:4px;border:1px dashed #FFDD00;cursor:help;font-weight:700;text-decoration:underline dotted">Hover for technical details.</span> One click does: expose drive → mount in Linux → start AI container → WebUI connects.</div>
+<div class="note" style="margin-bottom:.6rem; line-height:1.5">For extra large models (DeepSeek v4 or similar). Hive Console sends prompts to a Linux AI server that loads the model from a virtual drive <code>E:/dsh_storage.vhdx</code> (shown as <code>/mnt/dsh_storage</code> inside Linux). <span title="How: WebUI OPENAI_API_BASE_URLS includes http://dsh-compute-backend:8000/v1 (hivebench-studio defaults :3000 → :8000); Docker runs custom-dsh-rocm-backend with /dev/kfd + HSA 11.0.0 + FLASH3 FP8 on /mnt/dsh_storage/models. Does: Serves large model with tiered spill 20 VRAM+24 RAM+NVMe. Changing: No user action — Bootstrap sets it up." style="background:#000;color:#FFDD00;padding:.2rem .5rem;border-radius:4px;border:1px dashed #FFDD00;cursor:help;font-weight:700;text-decoration:underline dotted">Hover for technical details.</span> One click does: expose drive → mount in Linux → start AI container → WebUI connects.</div>
 <div class="note" style="margin-bottom:.6rem;background:#000;color:#FFDD00;border:2px solid #FFDD00;padding:.6rem .8rem;border-radius:8px"><b>Easy Setup (first time: have WSL2 + Docker, no drive yet):</b> 1) Select <b>drive</b> + <b>size</b> → <b>Create Drive</b> (creates selected GB dynamic sparse, formats to ext4 on first mount — no auto-create, initially small) → 2) <b>Mount AI Drive (Admin)</b> → <b>Yes</b> on UAC → 3) <b>Bootstrap Docker</b> → 4) Add model to <code style="background:#1a1a00;color:#FFDD00;border:1px solid #FFDD00">/mnt/dsh_storage/models</code> (via WSL) → 5) <b>Verify:live</b> green = WebUI talks to Linux model</div>
 <div id="setup-box" style="background:#000; border:1.5px solid #FFB703; color:#FFDD00; border-radius:8px; padding:12px; display:grid; gap:8px; margin-top:.7rem">
   <div style="grid-column:1 / -1; font-weight:700; color:#FFDD00; border-bottom:1px solid rgba(255,221,0,.18); padding-bottom:.35rem; margin-bottom:.2rem">Linux/Docker Setup</div>
@@ -328,24 +328,39 @@ def render_server_page() -> str:
 <div class="row" style="gap:.4rem;flex-wrap:wrap;margin-top:.4rem; display:none"><code>wsl --mount --vhd E:/dsh_storage.vhdx --bare</code> → <code>mount /dev/sdX1 /mnt/dsh_storage</code> → <code>docker compose up -d dsh-compute-backend</code> → <code>curl http://127.0.0.1:8000/health</code></div>
 <div class="note" style="display:none">Compose: <code>dsh-compute-backend:8000</code> <code>/dev/kfd:/dev/kfd</code> <code>/dev/dri:/dev/dri</code> <code>seccomp:unconfined</code> <code>group_add video/render</code> <code>/mnt/dsh_storage/models:/workspace/models:ro</code> <code>OPENAI_API_BASE_URLS=http://dsh-compute-backend:8000/v1</code></div>
 </details>
-<div id="setup-tier" class="kv-grid" style="margin-top:.6rem"></div>
-<div class="row" style="gap:.6rem;margin-top:.5rem; flex-wrap:wrap">
-  <label class="inline">context <select id="setup-ctx" onchange="refreshStatus()"><option value="32768">32k</option><option value="131072">131k (dual)</option><option value="128000">128k</option><option value="1000000">1M</option></select></label>
-  <label class="inline"><input id="setup-dual" type="checkbox" onchange="refreshStatus()"> dual 2× GPU</label>
-  <span class="note">FP8 KV 0.07/1024 · spill to NVMe · cap from leftover</span>
-</div>
 <pre id="setup-raw" style="max-height:160px;overflow:auto;display:none"></pre>
-<div class="note" style="margin-top:.5rem">Docker <code>GET /health</code> + <code>/v1/models</code> must be 200 for WebUI <code>:3000</code> to list Linux model. VHDX bare bypasses 9P.</div>
+</section>
+</div>
+
+<div id="tab-syscalc" class="tabpane" style="display:none">
+<section>
+<h2 style="margin-top:0">Sys Calc <span class="note">(fit check)</span></h2>
+<div class="note" style="margin-bottom:.6rem; line-height:1.6">It guesses if your model fits. It reads your VRAM, RAM and free disk, then splits the model across them. Change the model size and it updates max context, speed and free space.</div>
+<div id="syscalc-box" style="background:#000; border:1.5px solid #FFB703; color:#FFDD00; border-radius:8px; padding:12px; display:grid; gap:8px; margin-top:.7rem">
+  <div style="grid-column:1 / -1; font-weight:700; color:#FFDD00; border-bottom:1px solid rgba(255,221,0,.18); padding-bottom:.35rem; margin-bottom:.2rem">System Calculators</div>
+  <div style="display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem"><span style="font-weight:700">Context</span><input id="syscalc-ctx" type="range" min="2048" max="131072" step="1024" value="32768" style="flex:1; min-width:160px; accent-color:#FFB703" oninput="syscalcCtxChanged(true)" onchange="syscalcCtxChanged(false)"><b id="syscalc-ctx-label">32k</b><span class="note" style="font-size:.8rem">try 4k / 8k / 32k — updates without saving</span><button onclick="refreshStatus()" title="Re-run the fit math with the slider + model size above">Refresh</button></div>
+  <div style="display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem"><span style="font-weight:700">Model</span><input id="syscalc-model-gb" type="number" value="104" min="1" max="2000" step="1" style="width:70px; text-align:right; background:#000; color:#FFDD00; border:1px solid rgba(255,221,0,.4); border-radius:3px; padding:.15rem .3rem; -moz-appearance:textfield; appearance:textfield" onchange="refreshStatus()"><span style="opacity:.9; font-size:.85em">GB</span><span class="note" style="font-size:.8rem">model size — auto-filled from your gguf when known</span></div>
+  <div style="display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem"><span style="font-weight:700">Drive test</span><button onclick="testDriveSpeed(this)" title="Real uncached 128MB read/write test on the selected drive (a few seconds, file deleted after)">Test drive speed</button><span class="note" style="font-size:.8rem">real speed — retest after switching ports or drives</span></div>
+  <div id="setup-tier" class="kv-grid" style="margin:0"></div>
+</div>
 </section>
 </div>
 
 <div id="tab-agent" class="tabpane" style="display:none">
 <section>
 <h2 style="margin-top:0">Agent profiles <span class="note">(presets)</span></h2>
-<div class="row"><button onclick="loadAgentPresets()">Refresh</button><button onclick="createAgentPreset()">New</button></div>
-<div id="agent-presets-list" class="liblist">loading…</div>
-<div id="agent-preset-detail" style="display:none"><h3 id="agent-preset-name"></h3><pre id="agent-preset-content" style="max-height:300px;overflow:auto"></pre><div class="row"><button onclick="saveAgentPreset()">Save</button><button onclick="closeAgentPreset()">Close</button><span id="agent-preset-msg" class="note"></span></div></div>
-<div class="note">Create your own, customise ones you have — like DSH <code>apps/cli/config/agent-presets</code> (<code>preset.yml</code> + <code>agent.cordis.yml</code>). Duplicate any system preset to <code>~/.dsh/.agent-presets/&lt;id&gt;/</code> and edit.</div>
+<div id="agent-presets-box" style="background:#000; border:1.5px solid #FFB703; color:#FFDD00; border-radius:8px; padding:12px; display:grid; gap:8px; margin-top:.7rem">
+  <div style="grid-column:1 / -1; font-weight:700; color:#FFDD00; border-bottom:1px solid rgba(255,221,0,.18); padding-bottom:.35rem; margin-bottom:.2rem">Agent Profiles</div>
+  <div class="row"><button onclick="loadAgentPresets()">Refresh</button></div>
+  <div id="agent-presets-list-container" style="background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.6rem; display:grid; gap:8px">
+    <div id="agent-presets-list" class="liblist" style="display:grid; gap:8px; margin:0; padding:0">loading…</div>
+  </div>
+  <div id="agent-preset-detail" style="display:none"><h3 id="agent-preset-name"></h3><pre id="agent-preset-content" style="max-height:300px;overflow:auto"></pre><div class="row"><button onclick="saveAgentPreset()">Save</button><button onclick="closeAgentPreset()">Close</button><span id="agent-preset-msg" class="note"></span></div></div>
+</div>
+<div class="note" style="margin-top:.6rem; line-height:1.6; background:rgba(255,255,255,.06); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.6rem .8rem">
+<b>How Agent Profiles work (for new users):</b> Each profile is a DSH toolbox — a folder with <code>preset.yml</code> + <code>agent.cordis.yml</code> that defines which tools the LLM gets (bash, files, web, Code-Mode, Hive memory, etc.). Use the <b>radio</b> to pick the one active profile (only one at a time) — it’s passed to the LLM on your next <b>Agent</b> chat via <code>DSH_CORDIS_CONFIG</code>. <b>Edit</b> opens the preset file in notepad (Windows) / <code>open</code> (macOS) / <code>xdg-open</code> (Linux), <b>Open File Location</b> shows the folder in Explorer/Finder, <b>Duplicate</b> copies any profile to <code>~/.dsh/.agent-presets/&lt;id&gt;/</code> to make your own, <b>Delete</b> removes your copies. <code>Hive Standard/PTC/Minimal</code> are DSH Standard/PTC/Minimal with Hive memory; <code>Creator</code> (plus Hive) can author new Hive-aware presets.
+<br><span style="opacity:.85"><b>“ — user”</b> means it lives in your home dir (<code>~/.dsh/.agent-presets/</code>, editable, survives upgrades); <b>“ — system”</b> is shipped with DSH (<code>packages/preset/agent-presets/presets</code>, read-only).</span>
+</div>
 </section>
 </div>
 
@@ -363,7 +378,7 @@ def render_server_page() -> str:
   <div class="engine-group">
     <h3 title="How: GET /v1/models/local lists GGUFs from models_dir; resolve checks file else needs hf. Does: Sets weights for -m (size_gb for fit). Changing: Pick different GGUF changes VRAM need — Save+Load to restart.">Model </h3>
     <div class="grid-2col">
-      <label title="How: GET /v1/models/local scans models_dir. Does: Selects GGUF for -m (advisory, on Start). Changing: Different file → different size_gb/KV fit — Save+Load required.">Model  <select id="eng-model" onchange="engDirty=true; updateFit();"><option value="">— choose local model —</option></select></label>
+      <label title="How: GET /v1/models/local scans models_dir. Does: Selects GGUF for -m (advisory, on Start). Changing: Different file → different size_gb/KV fit — Save+Load required.">Model  <select id="eng-model" onchange="engModelChanged()"><option value="">— choose local model —</option></select></label>
       <span class="note">Selected: <b id="eng-model-display">—</b> <span id="eng-model-note" class="note" style="margin-left:.5rem"></span></span>
     </div>
   </div>
@@ -382,19 +397,19 @@ def render_server_page() -> str:
   <!-- Context -->
   <div class="engine-group">
     <h3>Context</h3>
-    <div class="grid-2col">
-      <label title="How: ctx_size → -c (8192 default), fit needs=size+ctx*0.25GB/1k. Does: Caps prompt+completion, KV cost. Changing: 8k→32k +6GB spill→NVMe/oom; >16k Auto forces q8_0.">contextLength  <input id="eng-ctxlen" type="number" value="8192" min="256" step="256" oninput="engDirty=true; updateFit();"></label>
-      <div id="eng-fit" class="fit-panel" style="display:block">
-        <div class="fit-grid">
-          <span id="fit-needs" class="fit-needs">needs —</span>
-          <span id="fit-has" class="fit-has">you have —</span>
-          <span id="fit-pct" class="fit-pct"></span>
-        </div>
-        <div class="fit-bar"><div id="fit-fill" class="fit-fill" style="width:0%"></div></div>
-        <div class="row fit-controls">
-          <label class="inline">context <input id="fit-ctx" type="range" min="2048" max="131072" step="1024" value="8192"> <span id="fit-ctx-label" title="How: fit needs vs hardware via /v1/server/status. Does: Visual guide, disables Load if needs>has. Changing: Slider only visual — Auto/Save commits.">8k</span> → <b id="fit-needs-val">—</b> </label>
-          <button type="button" id="eng-load-fit" onclick="engineLoadFromFit()" disabled>Load</button>
-        </div>
+    <div id="eng-fit" class="fit-panel" style="display:block">
+      <div class="fit-grid">
+        <span id="fit-needs" class="fit-needs">needs —</span>
+        <span id="fit-has" class="fit-has">you have —</span>
+        <span id="fit-pct" class="fit-pct"></span>
+      </div>
+      <div class="fit-bar"><div id="fit-fill" class="fit-fill" style="width:0%"></div></div>
+      <div class="row fit-controls">
+          <label class="inline">context <input id="fit-ctx" type="range" min="2048" max="131072" step="1024" value="8192"> <span id="fit-ctx-label" title="How: fit needs vs hardware via /v1/server/status. Does: Visual guide, disables Load if needs>has. Changing: Slider only visual — Auto/Save commits.">8k</span></label>
+      </div>
+      <div class="row fit-controls">
+        <label title="How: ctx_size → -c (8192 default), fit needs=size+ctx*0.25GB/1k. Does: Caps prompt+completion, KV cost. Changing: 8k→32k +6GB spill→NVMe/oom; >16k Auto forces q8_0.">Context length  <input id="eng-ctxlen" type="number" value="8192" min="256" step="256" oninput="engCtxChanged();"></label>
+        <button type="button" id="eng-load-fit" onclick="engineLoadFromFit()" disabled>Load</button>
       </div>
     </div>
   </div>
@@ -424,8 +439,9 @@ def render_server_page() -> str:
       <label title="How: -np <n> parallel slots. Does: Concurrent decode, ctx/slots. Changing: 1→4 throughput up, per-slot ctx down.">parallel  <input id="eng-parallel" type="number" placeholder="1" oninput="engDirty=true"></label>
       <label title="How: -b <n> 512 default. Does: Tokens/step RAM. Changing: 512→2048 prompt faster, more VRAM/spill.">batch  <input id="eng-batch" type="number" placeholder="512" oninput="engDirty=true"></label>
       <label title="How: -ub <n> 512. Does: Micro-batch physically. Changing: 512→128 lower peak but more steps; tune with batch.">ubatch  <input id="eng-ubatch" type="number" placeholder="512" oninput="engDirty=true"></label>
-      <label title="How: --cache-type-k q8_0/q4_0 else f16, Auto q8_0 if ctx>16384. Does: KV quant saves 50%/75%. Changing: f16→q8 halves KV.">cache K  <select id="eng-ctk" onchange="engDirty=true"><option value="">f16</option><option>q8_0</option><option>q4_0</option></select></label>
-      <label title="How: --cache-type-v same. Does: V cache quant. Changing: Same as K.">cache V  <select id="eng-ctv" onchange="engDirty=true"><option value="">f16</option><option>q8_0</option><option>q4_0</option></select></label>
+      <label title="How: --cache-type-k f32/f16/bf16/q8_0/q5_0/q5_1/q4_0/q4_1/iq4_nl else f16, Auto q8_0 if ctx>16384. Does: f16 lossless baseline, q8 halves KV, q5 ~3x, q4 quarters. Changing: q5_x/q4_x may need flash-attn off on some builds.">cache K  <select id="eng-ctk" onchange="engDirty=true;document.getElementById('eng-kvpreset').value=''"><option value="">f16</option><option>f32</option><option>bf16</option><option>q8_0</option><option>q5_0</option><option>q5_1</option><option>q4_0</option><option>q4_1</option><option>iq4_nl</option></select></label>
+      <label title="How: --cache-type-v same list. Does: V cache quant. Changing: Same as K.">cache V  <select id="eng-ctv" onchange="engDirty=true;document.getElementById('eng-kvpreset').value=''"><option value="">f16</option><option>f32</option><option>bf16</option><option>q8_0</option><option>q5_0</option><option>q5_1</option><option>q4_0</option><option>q4_1</option><option>iq4_nl</option></select></label>
+      <label title="How: One click sets K+V together. Does: Keys hate noise, values tolerate it — asymmetric q8/q4 protects keys while squeezing values. Changing: Pick one, or set K/V by hand for custom.">KV preset  <select id="eng-kvpreset" onchange="applyKvPreset(this.value,'eng-ctk','eng-ctv',true)"><option value="">custom</option><option value="lossless">Lossless f16/f16</option><option value="balanced">Balanced q8/q8</option><option value="asymmetric">Asymmetric q8/q4</option><option value="extreme">Extreme q4/q4</option></select></label>
     </div>
   </div>
 
@@ -595,15 +611,7 @@ providers.local.json (gitignored).</div>
 <section class="chatpane">
 <div id="sess-tabs" class="sesstabs"></div>
 <div class="chat-head">
-<h2 id="chat-title">Loaded model</h2>
-<div class="chat-controls">
-<span class="modesel">
-<label class="inline">model <select id="chat-provider" onchange="saveConvProvider(this.value)" title="How: select saves to localStorage hive-console-convprov, sent as provider on /v1/hive/turn vs /v1/agent/stream, swaps Hive.backend via registry. Does: Per-conversation model/endpoint. Changing: Pick different engine → different base_url/model for this tab only."></select></label>
-<label class="inline"><input type="radio" name="chatmode" value="hive" checked title="How: POST /v1/hive/stream → hive.process_turn curates assembled_content → single generate. Does: No tools, fast curated. Changing: Good for chat/memory; Agent needed for bash/code."> Hive </label>
-<label class="inline"><input type="radio" name="chatmode" value="agent" title="How: POST /v1/agent/stream → DshAgentService loop with tools/session log. Does: Full agent (bash/fs/web/subagent). Changing: Use for code/tasks; slower but multi-step."> Agent (dsh) </label>
-</span>
-<button onclick="newConversation()" title="How: newConversation() creates console-<uuid>, localStorage SESS_KEY, clears chatlog. Does: New hive conversation. Changing: Old tab kept; config changes apply only after New.">New conversation</button>
-</div>
+<div id="chat-statusbar" class="statusbar"><span id="chat-model">model: —</span><span class="sep">·</span><span id="chat-profile">profile: —</span></div>
 </div>
 <div id="chatlog" class="chatlog"></div>
 <div class="composer">
@@ -612,12 +620,9 @@ providers.local.json (gitignored).</div>
 <div class="sugbox" id="sug-chat"></div></span>
 <button id="sendbtn" onclick="chatSubmit()">Send</button>
 <button id="stopbtn" onclick="cancelStream()">Stop</button>
-<button id="savebtn" onclick="saveSession()" title="How: saveSession prompts title → sessions[convId].title → localStorage. Does: Persists tab+transcript (restoreTranscript caps 400). Changing: Name to keep; close × deletes + POST /v1/hive/reset.">Save session</button>
-<button onclick="newConversation()" title="How: Same as top New. Does: New session immediately. Changing: Same effect.">+ New session</button>
+<span class="sessbtns"><button id="afkbtn" onclick="toggleAfk(this)" title="AFK mode: queues pushes/merges until you return.">AFK</button><button id="savebtn" onclick="saveSession()" title="How: saveSession prompts title → sessions[convId].title → localStorage. Does: Persists tab+transcript (restoreTranscript caps 400). Changing: Name to keep; close × deletes + POST /v1/hive/reset.">Save session</button><button onclick="newConversation()" title="How: Same as top New. Does: New session immediately. Changing: Same effect.">+ New session</button></span>
 </div>
-<div class="note"><b>Hive</b>: direct curated generation. <b>Agent (dsh)</b>:
-the full DeepSeek Harness agent loop — bash/files/code tools, multi-step
-turns, durable session log.</div>
+<div class="note">Enter to send · type <b>/</b> for commands</div>
 </section>
 </div>
 
@@ -647,21 +652,24 @@ turns, durable session log.</div>
 <label class="inline"><input id="l-nommap" type="checkbox" title="How: no_mmap → --no-mmap. Does: Full RAM vs mmap. Changing: More RSS, avoids faults."> no-mmap </label>
 </div>
 <div class="row">
-<label class="inline" title="How: cache K → --cache-type-k f16/q8_0/q4_0, Auto q8_0 >16k. Does: Halves KV. Changing: f16→q8 saves 50%.">kv-K  <select id="l-ctk"><option value="">f16</option><option>q8_0</option><option>q4_0</option></select></label>
-<label class="inline" title="How: --cache-type-v same. Does: V cache quant. Changing: Same as K.">kv-V  <select id="l-ctv"><option value="">f16</option><option>q8_0</option><option>q4_0</option></select></label>
+<label class="inline" title="How: cache K → --cache-type-k f32/f16/bf16/q8_0/q5_0/q5_1/q4_0/q4_1/iq4_nl, Auto q8_0 >16k. Does: f16 lossless baseline, q8 halves KV, q5 ~3x, q4 quarters. Changing: q5_x/q4_x may need flash-attn off on some builds.">kv-K  <select id="l-ctk" onchange="document.getElementById('l-kvpreset').value=''"><option value="">f16</option><option>f32</option><option>bf16</option><option>q8_0</option><option>q5_0</option><option>q5_1</option><option>q4_0</option><option>q4_1</option><option>iq4_nl</option></select></label>
+<label class="inline" title="How: --cache-type-v same list. Does: V cache quant. Changing: Same as K.">kv-V  <select id="l-ctv" onchange="document.getElementById('l-kvpreset').value=''"><option value="">f16</option><option>f32</option><option>bf16</option><option>q8_0</option><option>q5_0</option><option>q5_1</option><option>q4_0</option><option>q4_1</option><option>iq4_nl</option></select></label>
+<label class="inline" title="How: One click sets K+V together — keys hate noise, values tolerate it. Does: Lossless f16/f16, Balanced q8/q8, Asymmetric q8/q4, Extreme q4/q4. Changing: Pick one, or set K/V by hand.">preset  <select id="l-kvpreset" onchange="applyKvPreset(this.value,'l-ctk','l-ctv',false)"><option value="">custom</option><option value="lossless">Lossless</option><option value="balanced">Balanced</option><option value="asymmetric">Asymmetric</option><option value="extreme">Extreme</option></select></label>
 <label class="inline" title="How: -b <n> 512 default. Does: Tokens/step RAM. Changing: 512→2048 prompt faster, more VRAM/spill.">batch  <input id="l-batch" type="number" size="4" placeholder="512"></label>
 <label class="inline" title="How: -ub <n> 512. Does: Micro-batch physically. Changing: 512→128 lower peak but more steps; tune with batch.">ubatch  <input id="l-ubatch" type="number" size="4" placeholder="512"></label>
 <label class="inline" title="How: --alias <id>. Does: Model id vs path. Changing: Clients see alias.">alias  <input id="l-alias" size="14" placeholder="model id"></label>
 </div>
 </details>
+<details id="launch-consoles"><summary>Consoles (status + server log) — click to show</summary>
 <pre id="status">loading…</pre>
+<pre id="srvlog" title="llama_server.log tail">log: loading…</pre>
+</details>
 <div id="instances"></div>
 <section id="proc-manager" style="margin-top:1rem">
 <h3 style="margin:.6rem 0 .3rem">Process manager <span class="note">CPU/RAM · kill</span></h3>
 <div class="row" style="gap:.5rem;align-items:center"><button onclick="refreshProcesses()">Refresh processes</button><span id="proc-msg" class="note"></span><span id="proc-sidecar" class="note" style="margin-left:.4rem"></span></div>
 <table style="width:100%;margin-top:.4rem"><thead><tr><th>PID</th><th>Kind</th><th>Name</th><th title="CPU % (process)">CPU%</th><th title="Resident memory MB">RAM MB</th><th>Port</th><th>Status</th><th></th></tr></thead><tbody id="proc-table"><tr><td colspan="8" class="note">loading…</td></tr></tbody></table>
 </section>
-<pre id="srvlog" title="llama_server.log tail">log: loading…</pre>
 </section>
 
 </div></div>
@@ -705,6 +713,77 @@ function show(id, obj) {{
 function val(id) {{ const el=document.getElementById(id); if(!el){{ console.warn('val missing', id); return ''; }} return el.value.trim(); }}
 function num(id) {{ const v = val(id); return v === '' ? null : +v; }}
 function fmtCap(n) {{ if(n==null||n==='-') return '-'; n=Number(n); if(n>=1000000) return (n/1000000).toFixed(1)+'M'; if(n>=1000) return (n/1000).toFixed(1)+'K'; return String(n); }}
+function fmtCtx(v) {{ const n=Number(v)||0; if(n>=1024) return Math.round(n/1024)+'k'; return String(n); }}
+window._syscalcCtx = 32768;
+window._syscalcMeasured = null;
+function syscalcCtxChanged(previewOnly) {{
+  const el = document.getElementById('syscalc-ctx');
+  const lab = document.getElementById('syscalc-ctx-label');
+  if (el) {{ window._syscalcCtx = parseInt(el.value,10)||32768; if (lab) lab.textContent = fmtCtx(window._syscalcCtx); }}
+  if (!previewOnly) {{ try {{ refreshStatus(); }} catch(e) {{}} }}
+}}
+async function testDriveSpeed(btn) {{
+  const el = document.getElementById('syscalc-measured');
+  const vhdxV = document.getElementById('setup-vhdx')?.value.trim() || '';
+  if (btn) btn.disabled = true;
+  if (el) el.textContent = 'testing… (128MB, uncached, a few seconds)';
+  try {{
+    const r = await api('/v1/setup/drive-speed', 'POST', vhdxV ? {{vhdx: vhdxV}} : {{}});
+    const txt = 'read ' + r.read_gbs + ' GB/s · write ' + r.write_gbs + ' GB/s (' + r.drive + ' ' + r.size_mb + 'MB test)';
+    window._syscalcMeasured = txt;
+    if (el) el.textContent = txt;
+    showToast('Drive ' + r.drive + ': ' + txt);
+  }} catch(e) {{ if (el) el.textContent = 'test failed — is the drive plugged in?'; alert('Drive test failed: '+e.message); }}
+  finally {{ if (btn) btn.disabled = false; }}
+}}
+function renderSysCalcTier(m, f, ctx) {{
+  const c = (label, val, title) => '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem"'+(title?' title="'+title+'"':'')+'>'+label+'</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">'+val+'</div>';
+  const g = (v) => (v ?? '-');
+  const ctxN = Number(ctx)||window._syscalcCtx||32768;
+  const kvPer1k = 0.07;
+  const kvGb = (ctxN/1024)*kvPer1k;
+  const t1 = Number(m.tier1VramGb)||0; const t2 = Number(m.tier2RamGb)||0; const t3 = Number(m.tier3NvmeGb)||0;
+  const tot = t1+t2+t3;
+  const pct = (v) => tot>0 ? Math.round(v/tot*100)+'%' : '-';
+  const splitTxt = tot>0 ? ('VRAM '+pct(t1)+' · RAM '+pct(t2)+' · Disk '+pct(t3)) : '-';
+  let fitTxt = 'Fits'; let fitCol = '#157a3e';
+  if (f.diskFull) {{ fitTxt='Too large'; fitCol='#b3372c'; }}
+  else if (f.ioLatencyWarning || (Number(m.freeAfterSpillGb) < 50)) {{ fitTxt='Tight'; fitCol='#FFB703'; }}
+  const fitBadge = '<b style="color:'+fitCol+'">'+fitTxt+'</b>';
+  const diskWarn = f.diskFull ? '<b style="color:#b3372c">Disk full — free space or shrink model/context</b><br>' : (Number(f.drivePercent) > 80 ? '<b style="color:#FFB703">Disk getting full</b><br>' : '');
+  const diskHead = (m.diskName || m.diskType) ? ((m.diskName||'disk') + ' (' + (m.diskType||'?') + ')<br>') : '';
+  const diskTxt = diskHead + diskWarn + g(m.driveFreeGb) + ' GB free (' + g(f.drivePercent) + '%) → ' + g(m.freeAfterSpillGb) + ' GB after spill';
+  const bwEach = g(m.estVramBw) + ' / ' + g(m.estRamBw) + ' / ' + g(m.estNvmeBw) + ' GB/s';
+  const bwTitle = 'VRAM guess from GPU table · RAM live from memory speed · Disk rated for THIS drive' + ((m.diskName||m.diskType) ? ' ('+(m.diskName||'?')+' — '+(m.diskType||'?')+')' : '');
+  let html = '';
+  html += c('VRAM', g(m.tier1VramGb)+' GB', 'Combined VRAM — cross-platform');
+  html += c('RAM', g(m.tier2RamGb)+' GB', 'Total RAM — cross-platform');
+  html += c('T3 spill estimator', g(m.tier3NvmeGb)+' GB (model '+g(m.modelGb)+' GB — change Model above)', 'Overflow past VRAM+RAM');
+  html += c('KV cost', kvPer1k+' GB per 1k · '+kvGb.toFixed(2)+' GB at '+fmtCtx(ctxN), 'KV cache math: 0.07 GB per 1k tokens');
+  html += c('Max context', fmtCap(f.recommendCap), 'Max context from leftover without clamp');
+  html += c('Fits', fitBadge, 'Green fits, yellow tight, red too large');
+  html += c('Split %', splitTxt, 'Share of model+KV in each tier');
+  html += c('Bandwidth Speed', g(m.estEffectiveBw)+' GB/s', 'Effective bandwidth weighted by tiers');
+  html += c('Each speed', bwEach, bwTitle);
+  html += c('Free space', g(m.freeAfterSpillGb)+' GB', 'Space left after spill');
+  html += c('Disk warning', diskTxt, 'Percent full + free after spill');
+  html += c('Live speed', '<span id="syscalc-live">checking…</span>', 'Real running model + Docker count right now');
+  html += c('Measured speed', '<span id="syscalc-measured">' + (window._syscalcMeasured || 'not tested — click Test drive speed') + '</span>', 'Real uncached 128MB test on the selected drive — retest after switching ports or drives');
+  return html;
+}}
+async function updateSysCalcLive() {{
+  const el = document.getElementById('syscalc-live');
+  if (!el) return;
+  try {{
+    const s = await api('/v1/server/status');
+    const inst = (s.instances||[]).length;
+    const model = s.model || ((s.instances||[])[0]||{{}}).key || '—';
+    const runTxt = s.running ? ('running '+(inst?inst+' loaded':'')+' '+(model||'')) : 'idle — no model loaded';
+    let dockTxt = '';
+    try {{ const d = await api('/v1/setup/docker-models'); const n = d && d.data ? d.data.length : 0; dockTxt = ' · Docker '+n+' model'+(n===1?'':'s'); }} catch(e) {{ dockTxt = ' · Docker ?'; }}
+    el.textContent = runTxt + dockTxt + ' (run Bench in Engines for tok/s)';
+  }} catch(e) {{ el.textContent = 'unavailable'; }}
+}}
 
 /* ------------------------------ tabs -------------------------------- */
 for (const btn of document.querySelectorAll('.tab[data-tab]')) {{
@@ -719,6 +798,7 @@ for (const btn of document.querySelectorAll('.tab[data-tab]')) {{
       // Defer library load to avoid blocking tab switch
       if (btn.dataset.tab === 'tab-library') setTimeout(loadLibrary, 10);
       else if (btn.dataset.tab === 'tab-setup') {{ loadSetup(); loadDrives(); }}
+      else if (btn.dataset.tab === 'tab-syscalc') {{ refreshStatus(); }}
       else if (btn.dataset.tab === 'tab-agent') loadAgentPresets();
       else if (btn.dataset.tab === 'tab-engines') loadEngines();
       else if (btn.dataset.tab === 'tab-hive') loadHiveDefaults();
@@ -789,12 +869,13 @@ async function refreshSetup(ctx, dual) {{
   if (msg) msg.textContent = 'loading…';
   try {{
     const vhdxQ = document.getElementById('setup-vhdx')?.value.trim() || '';
-    const modelGbQ = document.getElementById('setup-model-gb')?.value.trim() || '';
+    const modelGbQ = document.getElementById('syscalc-model-gb')?.value.trim() || document.getElementById('setup-model-gb')?.value.trim() || '';
     const s = await api('/v1/setup/status?context=' + encodeURIComponent(ctx) + '&dual=' + (dual ? 'true' : 'false') + (vhdxQ ? '&vhdx=' + encodeURIComponent(vhdxQ) : '') + (modelGbQ ? '&model_gb=' + encodeURIComponent(modelGbQ) : ''));
     const eng = document.getElementById('setup-engine');
     if (eng && s.state) eng.value = s.state.engine || 'windows-vulkan';
     const vhdx = document.getElementById('setup-vhdx');
     if (vhdx && s.state) vhdx.value = s.state.vhdxPath || 'E:/dsh_storage.vhdx';
+    try {{ if (window.checkDriveVhdxMatch) window.checkDriveVhdxMatch(); }} catch(e) {{}}
     const mdir = document.getElementById('setup-modelsdir');
     if (mdir && s.state) mdir.value = s.state.modelsDir || 'E:/models';
     const mp = document.getElementById('setup-mount');
@@ -843,13 +924,11 @@ async function refreshSetup(ctx, dual) {{
       const m = s.tier.metrics || {{}};
       const f = s.tier.flags || {{}};
       tierEl.style.display='grid'; tierEl.style.gridTemplateColumns='160px 1fr'; tierEl.style.gap='8px 10px'; tierEl.style.padding='12px'; tierEl.style.background='#000'; tierEl.style.border='1.5px solid #FFB703'; tierEl.style.borderRadius='8px'; tierEl.style.color='#FFDD00';
-      tierEl.innerHTML = ''
-        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem" title="Combined VRAM — cross-platform">VRAM</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + (m.tier1VramGb ?? '-') + ' GB</div>'
-        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem" title="Total RAM — cross-platform">RAM</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + (m.tier2RamGb ?? '-') + ' GB</div>'
-        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem; display:flex; flex-direction:column; gap:.35rem" title="T3 spill estimator: model+KV - VRAM - RAM. Change model GB here."><span>T3 spill estimator</span><label class="inline" style="margin:0; display:flex; gap:.2rem; align-items:center; background:rgba(0,0,0,.25); border:1px solid rgba(255,221,0,.18); border-radius:4px; padding:.15rem .3rem; width:fit-content">model <input id="setup-model-gb" type="number" value="' + (m.modelGb ?? 104) + '" min="1" max="2000" step="1" style="width:45px; text-align:right; background:#000; color:#FFDD00; border:1px solid rgba(255,221,0,.4); border-radius:3px; padding:.1rem .2rem; -moz-appearance:textfield; appearance:textfield" onchange="refreshStatus()"><span style="color:#FFDD00; opacity:.9; font-size:.85em">GB</span></label></div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + (m.tier3NvmeGb ?? '-') + ' GB</div>'
-        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem" title="Max context from leftover without clamp">Max context</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + fmtCap(f.recommendCap) + '</div>'
-        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem" title="Effective bandwidth weighted by tiers">Speed</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + (m.estEffectiveBw ?? '-') + ' GB/s</div>'
-        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem" title="Space left after spill">Free space</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + (m.freeAfterSpillGb ?? '-') + ' GB</div>';
+      const _ctxForTier = (typeof ctx !== 'undefined' && ctx) ? ctx : (window._syscalcCtx || 32768);
+      tierEl.innerHTML = renderSysCalcTier(m, f, _ctxForTier);
+      const _mgEl = document.getElementById('syscalc-model-gb');
+      if (_mgEl && document.activeElement !== _mgEl && m.modelGb != null) _mgEl.value = m.modelGb;
+      try {{ updateSysCalcLive(); }} catch(e) {{}}
     }}
     if (rawEl) {{
       rawEl.textContent = JSON.stringify(s, null, 1);
@@ -889,7 +968,7 @@ async function verifySetup() {{
     const ctx = document.getElementById('setup-ctx')?.value || '32768';
     const dual = document.getElementById('setup-dual')?.checked ? 'true' : 'false';
     const vhdxV = document.getElementById('setup-vhdx')?.value.trim() || '';
-    const modelGbV = document.getElementById('setup-model-gb')?.value.trim() || '';
+    const modelGbV = document.getElementById('syscalc-model-gb')?.value.trim() || document.getElementById('setup-model-gb')?.value.trim() || '';
     const s = await api('/v1/setup/status?context=' + encodeURIComponent(ctx) + '&dual=' + dual + (vhdxV ? '&vhdx=' + encodeURIComponent(vhdxV) : '') + (modelGbV ? '&model_gb=' + encodeURIComponent(modelGbV) : ''));
     const lin = s.health.linux || {{}};
     const ok = lin.vhdxExists && lin.vhdxMounted && lin.shardsFound && lin.dockerRunning && !s.tier.flags.diskFull;
@@ -915,10 +994,14 @@ async function refreshStatus() {{
   const dockerEl = document.getElementById('setup-docker');
   if (msg) msg.innerHTML = '<b style="color:#5a6b7d">…</b>';
   try {{
-    const ctx = document.getElementById('setup-ctx')?.value || '32768';
+    const sysCtx = document.getElementById('syscalc-ctx')?.value || window._syscalcCtx || '32768';
+    window._syscalcCtx = parseInt(sysCtx,10)||32768;
+    const lab = document.getElementById('syscalc-ctx-label');
+    if (lab) lab.textContent = fmtCtx(window._syscalcCtx);
+    const ctx = document.getElementById('setup-ctx')?.value || String(window._syscalcCtx);
     const dual = document.getElementById('setup-dual')?.checked ? 'true' : 'false';
     const vhdxV = document.getElementById('setup-vhdx')?.value.trim() || '';
-    const modelGbV = document.getElementById('setup-model-gb')?.value.trim() || '';
+    const modelGbV = document.getElementById('syscalc-model-gb')?.value.trim() || document.getElementById('setup-model-gb')?.value.trim() || '';
     const s = await api('/v1/setup/status?context=' + encodeURIComponent(ctx) + '&dual=' + dual + (vhdxV ? '&vhdx=' + encodeURIComponent(vhdxV) : '') + (modelGbV ? '&model_gb=' + encodeURIComponent(modelGbV) : ''));
     // Update health/tier like refreshSetup (single fetch, no double load)
     const lin = s.health.linux || {{}};
@@ -938,13 +1021,11 @@ async function refreshStatus() {{
       const m = s.tier.metrics || {{}};
       const f = s.tier.flags || {{}};
       tierEl.style.display='grid'; tierEl.style.gridTemplateColumns='160px 1fr'; tierEl.style.gap='8px 10px'; tierEl.style.padding='12px'; tierEl.style.background='#000'; tierEl.style.border='1.5px solid #FFB703'; tierEl.style.borderRadius='8px'; tierEl.style.color='#FFDD00';
-      tierEl.innerHTML = ''
-        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem" title="Combined VRAM — cross-platform">VRAM</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + (m.tier1VramGb ?? '-') + ' GB</div>'
-        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem" title="Total RAM — cross-platform">RAM</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + (m.tier2RamGb ?? '-') + ' GB</div>'
-        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem; display:flex; flex-direction:column; gap:.35rem" title="T3 spill estimator: model+KV - VRAM - RAM. Change model GB here."><span>T3 spill estimator</span><label class="inline" style="margin:0; display:flex; gap:.2rem; align-items:center; background:rgba(0,0,0,.25); border:1px solid rgba(255,221,0,.18); border-radius:4px; padding:.15rem .3rem; width:fit-content">model <input id="setup-model-gb" type="number" value="' + (m.modelGb ?? 104) + '" min="1" max="2000" step="1" style="width:45px; text-align:right; background:#000; color:#FFDD00; border:1px solid rgba(255,221,0,.4); border-radius:3px; padding:.1rem .2rem; -moz-appearance:textfield; appearance:textfield" onchange="refreshStatus()"><span style="color:#FFDD00; opacity:.9; font-size:.85em">GB</span></label></div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + (m.tier3NvmeGb ?? '-') + ' GB</div>'
-        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem" title="Max context from leftover without clamp">Max context</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + fmtCap(f.recommendCap) + '</div>'
-        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem" title="Effective bandwidth weighted by tiers">Speed</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + (m.estEffectiveBw ?? '-') + ' GB/s</div>'
-        + '<div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem" title="Space left after spill">Free space</div><div style="color:#FFDD00; background:rgba(255,255,255,.04); border:1px solid rgba(255,221,0,.18); border-radius:6px; padding:.45rem .6rem">' + (m.freeAfterSpillGb ?? '-') + ' GB</div>';
+      const _ctxForTier = (typeof ctx !== 'undefined' && ctx) ? ctx : (window._syscalcCtx || 32768);
+      tierEl.innerHTML = renderSysCalcTier(m, f, _ctxForTier);
+      const _mgEl = document.getElementById('syscalc-model-gb');
+      if (_mgEl && document.activeElement !== _mgEl && m.modelGb != null) _mgEl.value = m.modelGb;
+      try {{ updateSysCalcLive(); }} catch(e) {{}}
     }}
     if (dockerEl) {{
       const lin2 = s.health.linux || {{}};
@@ -1104,18 +1185,51 @@ async function loadDrives() {{
       sel.appendChild(o);
     }}
     // No auto-best: leave VHDX as-is (default E:/dsh_storage.vhdx) so user explicitly picks drive for LLM storage
+    const checkDriveVhdxMatch = () => {{
+      const toast = document.getElementById('drive-mismatch-toast');
+      const selEl = document.getElementById('setup-drive');
+      const vhdxEl2 = document.getElementById('setup-vhdx');
+      if (!toast || !selEl || !vhdxEl2) return;
+      const driveVal = (selEl.value || '').trim();
+      const vhdxVal = (vhdxEl2.value || '').trim();
+      if (!driveVal || !vhdxVal) {{ toast.style.display='none'; return; }}
+      const driveLetter = driveVal.split(':')[0].replace(/[^A-Za-z]/g,'').toUpperCase();
+      const vhdxLetter = vhdxVal.split(':')[0].replace(/[^A-Za-z]/g,'').toUpperCase();
+      if (driveLetter && vhdxLetter && driveLetter !== vhdxLetter) {{
+        toast.style.display='block';
+        toast.style.visibility='visible';
+        toast.style.opacity='1';
+        console.warn('[Hive] Drive/VHDX mismatch', driveVal, vhdxVal);
+      }} else {{
+        toast.style.display='none';
+      }}
+    }};
+    window.checkDriveVhdxMatch = checkDriveVhdxMatch;
+    const _toastEl = document.getElementById('drive-mismatch-toast');
+    if (_toastEl) {{
+      _toastEl.addEventListener('click', () => {{ _toastEl.style.display='none'; }});
+    }}
     sel.addEventListener('change', () => {{
       const drive = sel.value;
       let base = drive;
       if (!base.endsWith('/') && !base.endsWith('\\\\')) base += '/';
       base = base.replace(/\\\\/g, '/');
       if (vhdxEl) vhdxEl.value = base + 'dsh_storage.vhdx';
+      checkDriveVhdxMatch();
     }});
+    if (vhdxEl) {{
+      ['input','change','keyup','paste'].forEach(ev => vhdxEl.addEventListener(ev, checkDriveVhdxMatch));
+      vhdxEl.addEventListener('blur', checkDriveVhdxMatch);
+    }}
+    // initial check after drives load
+    setTimeout(checkDriveVhdxMatch, 500);
+    setTimeout(() => {{ try {{ checkDriveVhdxMatch(); }} catch(e) {{}} }}, 1200);
   }} catch(e) {{
     sel.innerHTML = '<option>auto-detect failed</option>';
   }}
 }}
 setTimeout(() => {{ try {{ loadSetup(); loadDrives(); }} catch(e) {{}} }}, 900);
+setTimeout(() => {{ try {{ if (window.checkDriveVhdxMatch) window.checkDriveVhdxMatch(); }} catch(e) {{}} }}, 1200);
 
 /* ---------------- typeahead (hub repos + local library) --------------- */
 let suggestTimer = null;
@@ -1295,6 +1409,7 @@ function applyConvProvider() {{
   const v = convProviderStore()[convId];
   if (!v) return;
   const sel = document.getElementById('chat-provider');
+  if (!sel) return;
   if ([...sel.options].some(o => o.value === v)) sel.value = v;
 }}
 
@@ -1354,7 +1469,8 @@ function bubble(role, text, meta) {{
 }}
 
 function chatMode() {{
-  return document.querySelector('input[name="chatmode"]:checked').value;
+  const r = document.querySelector('input[name="chatmode"]:checked');
+  return r ? r.value : 'hive';
 }}
 
 /* ------------------------- slash commands ---------------------------- */
@@ -1448,7 +1564,8 @@ async function sendChat() {{
   const ctrl = new AbortController();
   streamAbort = ctrl;
   const body = {{query: query, conversation_id: convId}};
-  const provSel = document.getElementById('chat-provider').value;
+  const provEl = document.getElementById('chat-provider');
+  const provSel = provEl ? provEl.value : '';
   if (provSel) body.provider = provSel;
   if (Object.keys(hiveOverrides).length) body.config = hiveOverrides;
   let text = '';
@@ -1789,7 +1906,14 @@ function showContextMenu(x,y,file,location) {{
     menu.appendChild(it);
   }};
   const hfUrl='https://huggingface.co/models?search=' + encodeURIComponent(file.split('/').pop().split('\\\\').pop().replace(/\\.gguf$/i,''));
-  addItem('View on Hugging Face', ()=>{{ window.open(hfUrl, '_blank'); }});
+  addItem('View README on Hugging Face', async ()=>{{
+    try {{
+      const r = await api('/v1/models/hf-link?file='+encodeURIComponent(file));
+      window.open(r.url, '_blank');
+      if (r.match && r.match !== 'file' && r.repo) showToast('Closest match: ' + r.repo);
+    }} catch(e) {{ window.open(hfUrl, '_blank'); }}
+  }});
+  addItem('Edit Settings', ()=>{{ editModelSettings(file); }});
   if(location==='system'){{
     addItem('Move to Linux (/mnt/dsh_storage/models)', async ()=>{{ await moveToLinux(file); }});
     addItem('Delete', async ()=>{{ await deleteModel(file,'system'); }}, true);
@@ -1805,6 +1929,30 @@ function showContextMenu(x,y,file,location) {{
   if(r.right>window.innerWidth) menu.style.left=(window.innerWidth-r.width-8)+'px';
   if(r.bottom>window.innerHeight) menu.style.top=(window.innerHeight-r.height-8)+'px';
   setTimeout(()=>{{ document.addEventListener('click', hideContextMenu, {{once:true}}); }},10);
+}}
+function editModelSettings(file) {{
+  // Jump to Engines with this model picked in the Engine model selector.
+  window._selectedFile = file;
+  const applySel = () => {{
+    for (const id of ['launch-model-select','eng-model']) {{
+      const sel = document.getElementById(id);
+      if (!sel) continue;
+      for (const o of sel.options) if (o.value===file) {{ o.hidden=false; o.style.display=''; }}
+      if ([...sel.options].some(o => o.value===file)) sel.value = file;
+    }}
+    for (const id of ['local-system','local-linux']) {{
+      const w = document.getElementById(id);
+      if (!w) continue;
+      for (const r of w.children) r.classList.toggle('selected', r.dataset.file===file);
+    }}
+    try {{ if (typeof updateFit === 'function') updateFit(); }} catch(e) {{}}
+  }};
+  applySel();
+  const tab = document.querySelector('.tab[data-tab="tab-engines"]');
+  if (tab) tab.click();
+  else {{ const p = document.getElementById('tab-engines'); if (p) p.style.display=''; }}
+  setTimeout(applySel, 800);
+  showToast('Editing settings for ' + file.split('/').pop().split('\\\\').pop());
 }}
 async function moveToLinux(file) {{
   if(!confirm('Move ' + file + ' to Linux (/mnt/dsh_storage/models)?\\n\\nThis copies the GGUF via WSL to the Docker volume.')) return;
@@ -1899,6 +2047,12 @@ function renderLibrary(wrapId, models, location) {{
       e.preventDefault();
       showContextMenu(e.clientX, e.clientY, m.file, location);
     }});
+    row.addEventListener('dblclick', (e)=>{{
+      e.preventDefault();
+      const x = e.clientX || (window.innerWidth / 2);
+      const y = e.clientY || (window.innerHeight / 2);
+      showContextMenu(x, y, m.file, location);
+    }});
     // restore selection if this is the selected file
     if(window._selectedFile && window._selectedFile===m.file) row.classList.add('selected');
     // long-press visual
@@ -1989,6 +2143,10 @@ async function loadAgentPresets() {{
   try {{
     // Try DSH apiproxy first, fallback to local file list
     let presets = [];
+    let selected = null;
+    try {{ const s = await api('/v1/agent-presets/selected'); selected = s.agentPreset; }} catch(e) {{ selected = localStorage.getItem('hive-selected-preset'); }}
+    if (!selected) selected = localStorage.getItem('hive-selected-preset') || 'hive-standard';
+    window._selectedAgentPreset = selected;
     try {{ const r = await api('/v1/agent-presets/list'); presets = r.presets || r; }} catch(e) {{
       // Fallback: list from /v1/provider/config + shipped presets
       const r = await api('/v1/provider/config'); presets = (r.providers||[]).map(p=>({{id:p.name, name:p.displayName||p.name, trust:'user'}}));
@@ -1999,19 +2157,52 @@ async function loadAgentPresets() {{
     for (const p of presets) {{
       const row = document.createElement('div');
       row.className = 'librow';
+      row.dataset.id = p.id;
+      row.style.cssText = 'display:flex; gap:8px 10px; align-items:center; background:rgba(255,255,255,.06); border:1px solid rgba(255,221,0,.22); border-radius:6px; padding:.45rem .6rem; color:#FFDD00; margin:0';
+      if (p.id === window._selectedAgentPreset) {{ row.style.background = 'rgba(255,183,3,.18)'; row.style.borderColor = '#FFB703'; }}
+      const radio = document.createElement('input');
+      radio.type = 'radio';
+      radio.name = 'agent-preset-active';
+      radio.value = p.id;
+      radio.checked = p.id === window._selectedAgentPreset;
+      radio.title = 'Enable this profile (only one active) — passed to LLM on next Agent turn';
+      radio.addEventListener('change', async () => {{
+        if (!radio.checked) return;
+        window._selectedAgentPreset = p.id;
+        localStorage.setItem('hive-selected-preset', p.id);
+        try {{ await api('/v1/agent-presets/selected', 'POST', {{agentPreset:p.id}}); showToast('Active profile: ' + p.id + ' — will be passed to LLM on next Agent turn'); }} catch(e) {{ showToast('Active: ' + p.id + ' (local)'); }}
+        const _cp = document.getElementById('chat-profile');
+        if (_cp) _cp.textContent = 'profile: ' + p.id;
+        for (const r of wrap.children) {{
+          const isActive = r.dataset.id === p.id;
+          r.style.background = isActive ? 'rgba(255,183,3,.18)' : 'rgba(255,255,255,.06)';
+          r.style.borderColor = isActive ? '#FFB703' : 'rgba(255,221,0,.22)';
+          const rb = r.querySelector('input[type="radio"]');
+          if (rb) rb.checked = isActive;
+        }}
+      }});
       const label = document.createElement('span');
-      label.textContent = `${{p.name||p.id}} — ${{p.trust||'system'}}${{p.broken?' — broken':''}}`;
+      label.textContent = `${{p.name||p.id}}${{p.broken?' — broken':''}}`;
+      label.style.cssText = 'flex:1; color:#FFDD00; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap';
+      const btnGroup = document.createElement('div');
+      btnGroup.style.cssText = 'display:flex; gap:6px; flex-shrink:0; align-items:center';
       const open = document.createElement('button');
-      open.textContent = p.trust==='user' ? 'Edit' : 'View';
+      open.textContent = 'Edit';
+      open.title = 'Open with system editor (notepad on Windows, open on macOS, xdg-open on Linux)';
       open.onclick = async () => {{
-        _currentAgentPreset = p.id;
-        document.getElementById('agent-preset-name').textContent = p.name||p.id;
-        const contentEl = document.getElementById('agent-preset-content');
         try {{
-          const r = await api('/v1/agent-presets/read', 'POST', {{agentPreset:p.id}});
-          contentEl.textContent = r.content || JSON.stringify(r,null,2);
-        }} catch(e) {{ contentEl.textContent = 'cannot read: '+e.message; }}
-        detail.style.display='';
+          const r = await api('/v1/agent-presets/open', 'POST', {{agentPreset:p.id}});
+          showToast('Opened ' + p.id + ' in ' + (r.editor || 'editor') + (r.path ? ' — ' + r.path : ''));
+        }} catch(e) {{ alert('Open failed: '+e.message); }}
+      }};
+      const loc = document.createElement('button');
+      loc.textContent = 'Open File Location';
+      loc.title = 'Show preset folder in Explorer (Windows) / Finder (macOS) / file manager (Linux)';
+      loc.onclick = async () => {{
+        try {{
+          const r = await api('/v1/agent-presets/open-location', 'POST', {{agentPreset:p.id}});
+          showToast('Opened folder for ' + p.id + ' — ' + r.path);
+        }} catch(e) {{ alert('Open location failed: '+e.message); }}
       }};
       const dup = document.createElement('button');
       dup.textContent = 'Duplicate';
@@ -2020,13 +2211,27 @@ async function loadAgentPresets() {{
         if (!nid) return;
         try {{ await api('/v1/agent-presets/copy', 'POST', {{from:p.id, agentPreset:nid}}); loadAgentPresets(); }} catch(e){{ alert(String(e)); }}
       }};
-      row.appendChild(label);
-      row.appendChild(open);
-      row.appendChild(dup);
+      btnGroup.appendChild(open);
+      btnGroup.appendChild(loc);
+      btnGroup.appendChild(dup);
       if (p.trust==='user') {{
-        const del = document.createElement('button'); del.textContent='Delete'; del.onclick=async()=>{{ if(!confirm('Delete '+p.id+'?'))return; try{{ await api('/v1/agent-presets/remove','POST',{{agentPreset:p.id}}); loadAgentPresets();}}catch(e){{alert(String(e));}} }}; row.appendChild(del);
+        const del = document.createElement('button'); del.textContent='Delete'; del.onclick=async()=>{{ if(!confirm('Delete '+p.id+'?'))return; try{{ await api('/v1/agent-presets/remove','POST',{{agentPreset:p.id}}); loadAgentPresets();}}catch(e){{alert(String(e));}} }}; btnGroup.appendChild(del);
       }}
+      row.appendChild(radio);
+      row.appendChild(label);
+      row.appendChild(btnGroup);
+      row.style.cursor = 'pointer';
+      row.addEventListener('click', (e) => {{
+        if (e.target.closest('button,input')) return;
+        radio.click();
+      }});
       if (p.description) row.title = p.description;
+      if (p.broken) {{
+        row.style.borderColor = '#b3372c';
+        row.style.background = 'rgba(179,55,44,.12)';
+      }} else if (p.id !== window._selectedAgentPreset) {{
+        // keep default
+      }}
       wrap.appendChild(row);
     }}
   }} catch(e) {{ if(wrap) wrap.textContent='load failed: '+e.message; }}
@@ -2057,7 +2262,28 @@ function closeAgentPreset() {{
 /* --------------------------- engines tab ----------------------------- */
 let engines = [];
 let engDefault = '';
+/* Operational defaults: no field stays blank — new profiles start here and
+   empty saved fields display these (balanced chat/coding values). */
+const ENG_DEFAULTS = {{
+  sampling: {{temperature: 0.7, top_p: 0.9, top_k: 40, min_p: 0.05,
+              repeat_penalty: 1.1, presence_penalty: 0, frequency_penalty: 0,
+              seed: '', mirostat: 0, mirostat_tau: 5.0, mirostat_eta: 0.1, stop: ''}},
+  load: {{threads: '', gpu_layers: 999, flash_attn: true, parallel_slots: 1,
+          batch_size: 512, ubatch_size: 512, cache_type_k: '', cache_type_v: '',
+          alias: '', context: 8192}}
+}};
 
+const KV_PRESETS = {{lossless: ['',''], balanced: ['q8_0','q8_0'],
+  asymmetric: ['q8_0','q4_0'], extreme: ['q4_0','q4_0']}};
+function applyKvPreset(name, kId, vId, markDirty) {{
+  if (!name) return;
+  const p = KV_PRESETS[name];
+  if (!p) return;
+  const k = document.getElementById(kId), v = document.getElementById(vId);
+  if (k) k.value = p[0];
+  if (v) v.value = p[1];
+  if (markDirty) engDirty = true;
+}}
 function samplingToForm(s) {{
   const set = (id, v) => document.getElementById(id).value =
     (v === undefined || v === null) ? '' : v;
@@ -2094,6 +2320,8 @@ function currentEngineIndex() {{
 function engineSelected() {{
   const e = engines[currentEngineIndex()];
   if (!e) return;
+  e.sampling = Object.assign({{}}, ENG_DEFAULTS.sampling, e.sampling || {{}});
+  e.load_options = Object.assign({{}}, ENG_DEFAULTS.load, e.load_options || {{}});
   document.getElementById('eng-name').value = e.name;
   document.getElementById('eng-kind').value = e.kind;
   document.getElementById('eng-url').value = e.base_url || '';
@@ -2107,6 +2335,8 @@ function engineSelected() {{
   // merged grid: populate uniform fields
   const mSel = document.getElementById('eng-model');
   if (mSel && e.model) mSel.value = e.model;
+  const mDisp = document.getElementById('eng-model-display');
+  if (mDisp) mDisp.textContent = (mSel && mSel.value) ? mSel.options[mSel.selectedIndex].text : (e.model ? e.model.split('/').pop().split('\\\\').pop() : '—');
   const ctxLenInput = document.getElementById('eng-ctxlen');
   if (ctxLenInput) ctxLenInput.value = String(e.load_options?.context ?? e.load_options?.contextLength ?? 8192);
   const fitCtx = document.getElementById('fit-ctx');
@@ -2138,8 +2368,9 @@ document.getElementById('eng-msg').textContent = '';
 
 function engineAdd() {{
   engines.push({{name: 'engine-' + (engines.length + 1), kind: 'llama_cpp',
-                base_url: '', load_options: {{}}, capabilities: ['streaming'],
-                sampling: {{}}}});
+                base_url: '', capabilities: ['streaming'],
+                load_options: JSON.parse(JSON.stringify(ENG_DEFAULTS.load)),
+                sampling: JSON.parse(JSON.stringify(ENG_DEFAULTS.sampling))}});
   renderEngineSelect(engines.length - 1);
   engineSelected();
   engDirty = true;
@@ -2630,9 +2861,33 @@ function engineLoadFromFit() {{
   if (sel) sel.value = selFile;
   startServer(document.querySelector('button[onclick="startServer(this)"]') || null);
 }}
+function engModelChanged() {{
+  engDirty = true;
+  const s = document.getElementById('eng-model');
+  const d = document.getElementById('eng-model-display');
+  if (d) d.textContent = (s && s.value) ? s.options[s.selectedIndex].text : '—';
+  updateFit();
+}}
+function syncCtxFromSlider() {{
+  const f = document.getElementById('fit-ctx');
+  const c = document.getElementById('eng-ctxlen');
+  if (f && c) c.value = f.value;
+  engDirty = true;
+  updateFit();
+}}
+function engCtxChanged() {{
+  const f = document.getElementById('fit-ctx');
+  const c = document.getElementById('eng-ctxlen');
+  if (f && c && c.value !== '') {{
+    const v = Math.min(131072, Math.max(2048, parseInt(c.value,10)||8192));
+    f.value = String(v);
+  }}
+  engDirty = true;
+  updateFit();
+}}
 (function initFitHooks(){{
   const ctxEl = document.getElementById('fit-ctx');
-  if (ctxEl) ctxEl.addEventListener('input', ()=>{{ updateFit(); }});
+  if (ctxEl) ctxEl.addEventListener('input', ()=>{{ syncCtxFromSlider(); }});
   let lastSel = null;
   setInterval(()=>{{
     const cur = window._selectedFile || (document.getElementById('launch-model-select') ? document.getElementById('launch-model-select').value : '');
@@ -2858,16 +3113,22 @@ function renderInspection(d) {{
 async function refresh() {{
   api('/v1/server/status').then(s => {{
     show('status', s);
-    const title = document.getElementById('chat-title');
-    if (s.running && s.healthy) {{
-      title.textContent = s.instances.length > 1
+    const modelTxt = (s.running && s.healthy)
+      ? (s.instances.length > 1
         ? `${{s.instances.length}} models loaded`
-        : 'Loaded: ' + (s.model || 'model');
-      title.className = 'ok';
-    }} else {{
-      title.textContent = s.running ? 'Loading…' : 'No model loaded';
-      title.className = 'bad';
+        : 'Loaded: ' + (s.model || 'model'))
+      : (s.running ? 'Loading…' : 'No model loaded');
+    const title = document.getElementById('chat-title');
+    if (title) {{
+      title.textContent = modelTxt;
+      title.className = (s.running && s.healthy) ? 'ok' : 'bad';
     }}
+    const chatModel = document.getElementById('chat-model');
+    if (chatModel) chatModel.textContent = 'model: ' + modelTxt.replace(/^Loaded: /, '');
+    api('/v1/agent-presets/selected').then(p => {{
+      const cp = document.getElementById('chat-profile');
+      if (cp) cp.textContent = 'profile: ' + (p.agentPreset || '—');
+    }}).catch(() => {{}});
     const topStatus = document.getElementById('top-right-status');
     if (topStatus) {{
       if (s.running && s.healthy) {{
@@ -2904,6 +3165,7 @@ async function refresh() {{
     // Chat model picker: every loaded instance's provider + remote providers.
     api('/v1/provider/config').then(pc => {{
       const sel = document.getElementById('chat-provider');
+      if (!sel) return;
       const current = sel.value;
       sel.innerHTML = '';
       const locals = (s.instances || []).map(i => 'local-' + i.key);
@@ -3001,5 +3263,33 @@ document.addEventListener('visibilitychange', ()=>{{
     refreshProcesses().catch(e=>console.error(e));
   }}
 }});
+/* ---------------- tap tips (touch: tap shows tip, tap again closes) ------ */
+(function tapTips(){{
+  if (!('ontouchstart' in window) && !(navigator.maxTouchPoints > 0)) return;
+  for (const el of document.querySelectorAll('[title]')) {{
+    if (!el.dataset.taptip) {{ el.dataset.taptip = el.getAttribute('title'); el.removeAttribute('title'); }}
+  }}
+  let openFor = null;
+  const box = document.createElement('div');
+  box.id = 'tap-tip';
+  box.style.cssText = 'position:fixed;z-index:2000;max-width:82vw;background:#1c1e26;color:#f2f3f7;font-size:.82rem;line-height:1.4;padding:.55rem .7rem;border-radius:8px;border:1.5px solid #FFDD00;box-shadow:0 4px 14px rgba(0,0,0,.4);display:none;';
+  document.body.appendChild(box);
+  box.addEventListener('click', () => {{ box.style.display='none'; openFor=null; }});
+  document.addEventListener('click', (e) => {{
+    const t = (e.target && e.target.closest) ? e.target.closest('[data-taptip],[title],.hint') : null;
+    if (!t) return;
+    const txt = t.dataset.taptip || t.getAttribute('title') || t.dataset.tip || t.getAttribute('data-tip') || '';
+    if (!txt) return;
+    if (t.hasAttribute('title')) t.removeAttribute('title');
+    if (openFor === t) {{ box.style.display='none'; openFor=null; return; }}
+    openFor = t;
+    box.textContent = txt;
+    box.style.display = 'block';
+    const r = t.getBoundingClientRect();
+    box.style.left = Math.max(8, Math.min(window.innerWidth - box.offsetWidth - 8, r.left)) + 'px';
+    const below = r.bottom + 8;
+    box.style.top = ((below + 140 < window.innerHeight) ? below : Math.max(8, r.top - 140)) + 'px';
+  }}, true);
+}})();
 </script>
 </body></html>"""

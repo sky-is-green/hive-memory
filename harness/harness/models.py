@@ -902,6 +902,69 @@ class LlamaServerManager:
             if e.get("path", "").endswith(".gguf")
         ]
 
+    def hf_readme_link(self, filename: str) -> dict:
+        """Resolve a local GGUF filename to its Hugging Face repo page (README).
+
+        Searches the hub for the model name (quant suffix stripped, then full
+        stem), then verifies which candidate repo actually contains the file.
+        Falls back to the best-guess repo, then to a hub search URL — so setup
+        stays easy even when the exact file can't be pinned down.
+        """
+        import re as _re
+        from urllib.parse import quote as _quote
+
+        base = filename.split("/")[-1].split("\\")[-1]
+        stem = base[:-5] if base.lower().endswith(".gguf") else base
+        # loosest-last query ladder: quant-stripped stem, full stem, first
+        # two tokens (org-style prefixes often mismatch, short names hit).
+        queries = [stem]
+        stripped = _re.sub(
+            r"[-_](?:UD-)?(?:Q\d[\w]*|IQ\d[\w]*|F16|F32|BF16)$",
+            "", stem, flags=_re.IGNORECASE,
+        )
+        if stripped and stripped != stem:
+            queries.insert(0, stripped)
+        toks = _re.split(r"[-_.\s]+", stripped)
+        toks = [t for t in toks if t and len(t) > 1]
+        if len(toks) >= 2:
+            queries.append(" ".join(toks[:2]))
+        first_repo = ""
+        good_search = ""
+        for q in queries:
+            try:
+                cands = self.hub_search(q, limit=5)
+            except Exception:
+                continue
+            if cands and not good_search:
+                # verified: this query returns results on the hub, so its
+                # search page is never empty — the old click behaviour.
+                good_search = q
+            for c in cands:
+                repo = c.get("repo", "")
+                if not repo:
+                    continue
+                if not first_repo:
+                    first_repo = repo
+                try:
+                    files = self.hub_files(repo)
+                except Exception:
+                    continue
+                if any(f["file"].split("/")[-1].lower() == base.lower()
+                       for f in files):
+                    return {"repo": repo,
+                            "url": f"https://huggingface.co/{repo}",
+                            "match": "file"}
+        if first_repo:
+            return {"repo": first_repo,
+                    "url": f"https://huggingface.co/{first_repo}",
+                    "match": "guess"}
+        # last resort: the pre-resolver behaviour — hub search page for a
+        # query proven non-empty above, else the plain stem (no extension,
+        # which the hub matches far better than a full filename).
+        q = good_search or stem
+        return {"repo": "", "url": f"https://huggingface.co/models?search={_quote(q)}",
+                "match": "search"}
+
     def delete_local(self, file: str) -> dict:
         """Remove one GGUF from the local library (path-traversal safe)."""
         root = self.models_dir.resolve()

@@ -467,6 +467,187 @@ def _auto_preset_load_options(size_gb: float, hardware_gb: float, file_name: str
     return out
 
 
+def _drive_disk_speed(drive: str, hint_path: str | None = None) -> tuple:
+    """Rated sequential speed for the selected drive, looked up fresh each call.
+
+    Returns (gb_per_s_or_None, disk_name, disk_type). A plugged-in HDD reports
+    ~0.15 GB/s instead of the NVMe guess, so Sys Calc stays honest per drive.
+    Windows maps the drive letter to its physical disk; other platforms use
+    df + lsblk (spinning ROTA=1 counts as HDD).
+    """
+    import json as _json
+
+    def _rated(name: str, mediatype: str, bustype: str):
+        n, mt, bt = (name or ""), (mediatype or "").upper(), (bustype or "").upper()
+        if mt == "HDD" or "HDD" in n.upper():
+            return 0.15, n, "HDD"
+        if bt == "NVME":
+            if "GEN5" in n.upper() or "PCIE5" in n.upper() or "PCIE 5" in n.upper():
+                return 14.0, n, "NVMe SSD"
+            if "GEN3" in n.upper() or "PCIE3" in n.upper():
+                return 3.5, n, "NVMe SSD"
+            return 7.5, n, "NVMe SSD"
+        if bt == "USB":
+            # USB SSD bridges (e.g. RTL9210C) top out at 10Gbps ≈ 1.0 GB/s —
+            # a USB4 port can't push them faster, the enclosure is the cap.
+            return (1.0, n, "USB SSD") if mt == "SSD" else (0.12, n, "USB HDD")
+        if mt == "SSD":
+            return (1.0, n, "SAS SSD") if bt == "SAS" else (0.55, n, "SATA SSD")
+        if n or mt or bt:
+            return None, n, (mt or bt or "unknown")
+        return None, "", "unknown"
+
+    if sys.platform == "win32":
+        try:
+            letter = (drive or "").strip().rstrip(":\\") or "E"
+            out = subprocess.check_output(
+                ["powershell", "-Command",
+                 f"Get-Partition -DriveLetter '{letter}' | Get-Disk | Get-PhysicalDisk | "
+                 "Select-Object FriendlyName,MediaType,BusType | ConvertTo-Json -Compress"],
+                timeout=4, text=True, stderr=subprocess.DEVNULL,
+                creationflags=_NO_WINDOW,
+            )
+            data = _json.loads(out.strip() or "null")
+            rows = data if isinstance(data, list) else ([data] if isinstance(data, dict) else [])
+            for row in rows:
+                bw, nm, tp = _rated(str(row.get("FriendlyName") or ""),
+                                    str(row.get("MediaType") or ""),
+                                    str(row.get("BusType") or ""))
+                if bw is not None or nm:
+                    return bw, nm, tp
+            return None, "", "unknown"
+        except Exception:
+            return None, "", "unknown"
+    try:
+        probe = hint_path if hint_path and os.path.exists(os.path.dirname(hint_path) or ".") else "/"
+        if hint_path and os.path.isdir(hint_path):
+            probe = hint_path
+        out = subprocess.check_output(
+            ["df", "--output=source", str(probe)], timeout=3, text=True,
+            stderr=subprocess.DEVNULL,
+        )
+        dev = ""
+        for line in out.splitlines():
+            line = line.strip()
+            if line and line != "Filesystem" and line.startswith("/dev/"):
+                dev = line.split()[0]
+                break
+        if not dev:
+            return None, "", "unknown"
+        base = dev.rstrip("0123456789")
+        out2 = subprocess.check_output(
+            ["lsblk", "-d", "-n", "-o", "NAME,TRAN,ROTA", base],
+            timeout=3, text=True, stderr=subprocess.DEVNULL,
+        )
+        parts = out2.split()
+        tran = parts[1].lower() if len(parts) > 1 else ""
+        rota = parts[2].strip() if len(parts) > 2 else ""
+        if rota == "1":
+            return 0.15, base, "HDD"
+        if tran == "nvme":
+            return 7.5, base, "NVMe SSD"
+        if tran == "usb":
+            return 0.4, base, "USB SSD"
+        if tran in ("sata", "sas", "ata"):
+            return (1.0, base, "SAS SSD") if tran == "sas" else (0.55, base, "SATA SSD")
+        return None, base, "unknown"
+    except Exception:
+        return None, "", "unknown"
+
+
+def _measure_drive_speed(drive: str, size_mb: int = 128) -> dict:
+    """Measure real sequential write/read on the selected drive (uncached).
+
+    Uses FILE_FLAG_NO_BUFFERING on Windows so RAM cache can't fake the number
+    (a small cached test once read 3.4 GB/s off a 1 GB/s stick). Small temp
+    file, always cleaned up. Returns {ok, drive, read_gbs, write_gbs, ...}.
+    """
+    import time
+
+    letter = (drive or "").strip().rstrip(":\\") or "E"
+    root = letter + ":\\"
+    if sys.platform == "win32" and not os.path.isdir(root):
+        return {"ok": False, "error": f"drive {letter}: not found"}
+    path = os.path.join(root if sys.platform == "win32" else "/tmp",
+                        ".hive_speedtest.tmp")
+    n = max(32, min(512, int(size_mb or 128)))
+    total = n * 1024 * 1024
+    try:
+        chunk = os.urandom(1024 * 1024)
+        t0 = time.perf_counter()
+        with open(path, "wb") as fh:
+            for _ in range(n):
+                fh.write(chunk)
+            fh.flush()
+            os.fsync(fh.fileno())
+        write_s = time.perf_counter() - t0
+        read_s = None
+        if sys.platform == "win32":
+            import ctypes
+            from ctypes import wintypes
+            k32 = ctypes.windll.kernel32
+            k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD,
+                                        wintypes.DWORD, wintypes.LPVOID,
+                                        wintypes.DWORD, wintypes.DWORD,
+                                        wintypes.HANDLE]
+            k32.CreateFileW.restype = wintypes.HANDLE
+            k32.ReadFile.argtypes = [wintypes.HANDLE, wintypes.LPVOID,
+                                     wintypes.DWORD,
+                                     ctypes.POINTER(wintypes.DWORD),
+                                     wintypes.LPVOID]
+            k32.ReadFile.restype = wintypes.BOOL
+            k32.VirtualAlloc.argtypes = [wintypes.LPVOID, ctypes.c_size_t,
+                                         wintypes.DWORD, wintypes.DWORD]
+            k32.VirtualAlloc.restype = wintypes.LPVOID
+            k32.VirtualFree.argtypes = [wintypes.LPVOID, ctypes.c_size_t,
+                                        wintypes.DWORD]
+            k32.VirtualFree.restype = wintypes.BOOL
+            k32.CloseHandle.argtypes = [wintypes.HANDLE]
+            k32.CloseHandle.restype = wintypes.BOOL
+            k32.GetLastError.argtypes = []
+            k32.GetLastError.restype = wintypes.DWORD
+            h = k32.CreateFileW(path, 0x80000000, 0x1 | 0x2, None, 3,
+                                0x20000000 | 0x08000000, None)
+            if h == -1 or h is None:
+                raise OSError("uncached open failed")
+            try:
+                buf_size = 1024 * 1024
+                buf = k32.VirtualAlloc(None, buf_size, 0x1000 | 0x2000, 0x04)
+                if not buf:
+                    raise OSError("buffer alloc failed")
+                try:
+                    got = wintypes.DWORD(0)
+                    left = total
+                    t0 = time.perf_counter()
+                    while left > 0:
+                        ok = k32.ReadFile(h, buf, buf_size, ctypes.byref(got), None)
+                        if not ok or not got.value:
+                            err = k32.GetLastError()
+                            raise OSError(f"uncached read failed ({err})")
+                        left -= got.value
+                    read_s = time.perf_counter() - t0
+                finally:
+                    k32.VirtualFree(buf, 0, 0x8000)
+            finally:
+                k32.CloseHandle(h)
+        else:
+            with open(path, "rb") as fh:
+                t0 = time.perf_counter()
+                while fh.read(1024 * 1024):
+                    pass
+                read_s = time.perf_counter() - t0
+        return {"ok": True, "drive": letter + ":", "size_mb": n,
+                "write_gbs": round(n / 1024 / write_s, 2),
+                "read_gbs": round(n / 1024 / read_s, 2) if read_s else None}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:200]}
+    finally:
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+
+
 def _setup_tier(context_tokens: int = 32768, dual: bool = False, vhdx: str | None = None, model_gb: float | None = None) -> dict:
     """Tiered allocation — model-agnostic, no hardcoded 104.
 
@@ -571,25 +752,40 @@ def _setup_tier(context_tokens: int = 32768, dual: bool = False, vhdx: str | Non
                 RAM_BW = round(max(30, min(90, int(m.group(1)) * 0.016)), 1)
         except Exception:
             pass
+    # Disk speed for the SELECTED drive (fresh per call, so a plugged-in HDD
+    # reports ~0.15 GB/s instead of the NVMe guess). Falls back to the old
+    # any-NVMe guess only when per-drive lookup fails.
+    disk_name, disk_type = "", "unknown"
     try:
-        out = subprocess.check_output(
-            ["powershell", "-Command", "Get-PhysicalDisk | Where-Object BusType -eq 'NVMe' | Select-Object -ExpandProperty FriendlyName"],
-            timeout=2, text=True, stderr=subprocess.DEVNULL, creationflags=_NO_WINDOW,
-        )
-        if out.strip():
-            if "Gen5" in out or "PCIe5" in out:
-                NVME_BW = 14.0
-            elif "Gen3" in out:
-                NVME_BW = 3.5
-            else:
-                NVME_BW = 7.5
+        _bw, _nm, _tp = _drive_disk_speed(drive, vhdx_path)
+        disk_name, disk_type = _nm, _tp
+        if _bw is not None:
+            NVME_BW = _bw
     except Exception:
         pass
+    if NVME_BW is None:
+        try:
+            out = subprocess.check_output(
+                ["powershell", "-Command", "Get-PhysicalDisk | Where-Object BusType -eq 'NVMe' | Select-Object -ExpandProperty FriendlyName"],
+                timeout=2, text=True, stderr=subprocess.DEVNULL, creationflags=_NO_WINDOW,
+            )
+            if out.strip():
+                disk_name = out.strip().splitlines()[0].strip()
+                disk_type = "NVMe SSD"
+                if "Gen5" in out or "PCIe5" in out:
+                    NVME_BW = 14.0
+                elif "Gen3" in out:
+                    NVME_BW = 3.5
+                else:
+                    NVME_BW = 7.5
+        except Exception:
+            pass
     if NVME_BW is None and sys.platform != "win32":
         try:
             out2 = subprocess.check_output(["lsblk", "-d", "-o", "NAME,TRAN"], timeout=2, text=True, stderr=subprocess.DEVNULL)
             if "nvme" in out2.lower():
                 NVME_BW = 7.5
+                disk_type = "NVMe SSD"
         except Exception:
             pass
     try:
@@ -681,6 +877,8 @@ def _setup_tier(context_tokens: int = 32768, dual: bool = False, vhdx: str | Non
             "estNvmeBw": NVME_BW,
             "estEffectiveBw": weighted_bw,
             "modelGb": round(MODEL_GB, 2),
+            "diskName": disk_name,
+            "diskType": disk_type,
         },
         "flags": {
             "ioLatencyWarning": io_warn,
@@ -1112,7 +1310,7 @@ class ServerStartRequest(BaseModel):
     threads: Optional[int] = None
     flash_attn: bool = False
     parallel_slots: Optional[int] = None
-    cache_type_k: Optional[str] = None  # f16 | q8_0 | q4_0 ...
+    cache_type_k: Optional[str] = None  # f32 | f16 | bf16 | q8_0 | q5_0 | q5_1 | q4_0 | q4_1 ...
     cache_type_v: Optional[str] = None
     batch_size: Optional[int] = None
     ubatch_size: Optional[int] = None
@@ -1616,6 +1814,24 @@ def create_app(
         result = _ensure_vhdx(vhdx, size_gb=size)
         if not result["ok"]:
             raise HTTPException(400, f"Create failed at {vhdx}: {result.get('error','')}")
+        return result
+
+    @app.post("/v1/setup/drive-speed")
+    async def setup_drive_speed(request: Request):
+        """Real uncached speed test on the selected drive (128MB, then deleted)."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        vhdx = str((body.get("vhdx") or "") if isinstance(body, dict) else "").strip()
+        drv = str((body.get("drive") or "") if isinstance(body, dict) else "").strip()
+        if not drv and vhdx:
+            drv = os.path.splitdrive(vhdx)[0] or ""
+        if not drv:
+            drv = os.path.splitdrive(os.environ.get("VHDX_PATH", r"E:\dsh_storage.vhdx"))[0] or "E:"
+        result = _measure_drive_speed(drv)
+        if not result.get("ok"):
+            raise HTTPException(500, f"drive test failed: {result.get('error', '')}")
         return result
 
     # ------------------------------------------------------------------
@@ -3462,11 +3678,16 @@ def create_app(
         dst = str(body.get("agentPreset") or body.get("id") or "").strip()
         if not src or not dst:
             raise HTTPException(422, "from and agentPreset required")
-        # Minimal copy: duplicate directory from shipped presets
+        # Minimal copy: duplicate directory from shipped presets (supports new DSH layout)
         import shutil
-        shipped = REPO_ROOT.parent / "hivebench-studio" / "apps" / "cli" / "config" / "agent-presets" / src
-        if not shipped.is_dir():
-            shipped = Path.home() / ".dsh" / ".agent-presets" / src
+        shipped_candidates = [
+            REPO_ROOT.parent / "hivebench-studio" / "packages" / "preset" / "agent-presets" / "presets" / src,
+            REPO_ROOT.parent / "hivebench-studio" / "apps" / "cli" / "config" / "agent-presets" / src,
+            Path.home() / ".dsh" / ".agent-presets" / src,
+        ]
+        shipped = next((p for p in shipped_candidates if p.is_dir()), None)
+        if shipped is None:
+            shipped = shipped_candidates[0]
         if not shipped.is_dir():
             raise HTTPException(404, f"preset not found: {src}")
         user_root = Path.home() / ".dsh" / ".agent-presets" / dst
@@ -3506,8 +3727,9 @@ def create_app(
         pid = str(body.get("agentPreset") or body.get("id") or "").strip()
         if not pid:
             raise HTTPException(422, "agentPreset required")
-        # Search shipped then user
+        # Search shipped then user (supports new DSH layout)
         candidates = [
+            REPO_ROOT.parent / "hivebench-studio" / "packages" / "preset" / "agent-presets" / "presets" / pid / "agent.cordis.yml",
             REPO_ROOT.parent / "hivebench-studio" / "apps" / "cli" / "config" / "agent-presets" / pid / "agent.cordis.yml",
             Path.home() / ".dsh" / ".agent-presets" / pid / "agent.cordis.yml",
         ]
@@ -3515,6 +3737,155 @@ def create_app(
             if cand.is_file():
                 return {"agentPreset": pid, "content": cand.read_text(encoding="utf-8"), "trust": "user" if ".dsh" in str(cand) else "system"}
         raise HTTPException(404, f"preset not found: {pid}")
+
+    @app.post("/v1/agent-presets/open")
+    async def agent_presets_open(request: Request):
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(422, "invalid JSON")
+        pid = str(body.get("agentPreset") or body.get("id") or "").strip()
+        if not pid:
+            raise HTTPException(422, "agentPreset required")
+        candidates = [
+            REPO_ROOT.parent / "hivebench-studio" / "packages" / "preset" / "agent-presets" / "presets" / pid / "agent.cordis.yml",
+            REPO_ROOT.parent / "hivebench-studio" / "apps" / "cli" / "config" / "agent-presets" / pid / "agent.cordis.yml",
+            Path.home() / ".dsh" / ".agent-presets" / pid / "agent.cordis.yml",
+        ]
+        preset_path = None
+        for cand in candidates:
+            if cand.is_file():
+                preset_path = cand
+                break
+        if preset_path is None:
+            dir_candidates = [
+                REPO_ROOT.parent / "hivebench-studio" / "packages" / "preset" / "agent-presets" / "presets" / pid,
+                REPO_ROOT.parent / "hivebench-studio" / "apps" / "cli" / "config" / "agent-presets" / pid,
+                Path.home() / ".dsh" / ".agent-presets" / pid,
+            ]
+            for d in dir_candidates:
+                if d.is_dir():
+                    preset_path = d
+                    break
+        if preset_path is None or not preset_path.exists():
+            raise HTTPException(404, f"preset not found: {pid}")
+        import sys, subprocess, os
+        editor = None
+        try:
+            if sys.platform == "win32":
+                if preset_path.is_dir():
+                    os.startfile(str(preset_path))
+                    editor = "explorer"
+                else:
+                    subprocess.Popen(["notepad", str(preset_path)])
+                    editor = "notepad"
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(preset_path)])
+                editor = "open"
+            else:
+                opened = False
+                for cmd in [["xdg-open", str(preset_path)], ["sensible-editor", str(preset_path)], ["gedit", str(preset_path)]]:
+                    try:
+                        subprocess.Popen(cmd)
+                        editor = cmd[0]
+                        opened = True
+                        break
+                    except FileNotFoundError:
+                        continue
+                if not opened:
+                    raise FileNotFoundError("no editor found (tried xdg-open, sensible-editor, gedit)")
+            return {"agentPreset": pid, "path": str(preset_path), "editor": editor}
+        except Exception as exc:
+            raise HTTPException(500, f"failed to open {preset_path}: {exc}")
+
+    @app.get("/v1/agent-presets/selected")
+    def agent_presets_selected_get():
+        p = REPO_ROOT / "harness_state" / "selected_agent_preset.txt"
+        try:
+            if p.is_file():
+                v = p.read_text(encoding="utf-8").strip()
+                if v:
+                    return {"agentPreset": v}
+        except Exception:
+            pass
+        # Default to Hive variant when available (defaults deleted per user request)
+        hive_default = Path.home() / ".dsh" / ".agent-presets" / "hive-standard"
+        if hive_default.is_dir():
+            return {"agentPreset": "hive-standard"}
+        return {"agentPreset": "standard"}
+
+    @app.post("/v1/agent-presets/selected")
+    async def agent_presets_selected_post(request: Request):
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(422, "invalid JSON")
+        pid = str(body.get("agentPreset") or body.get("id") or body.get("preset") or "").strip()
+        if not pid:
+            raise HTTPException(422, "agentPreset required")
+        if not re.match(r"^[a-z0-9][a-z0-9-]*$", pid):
+            raise HTTPException(422, "invalid preset id")
+        # validate exists in shipped or user
+        candidates = [
+            REPO_ROOT.parent / "hivebench-studio" / "packages" / "preset" / "agent-presets" / "presets" / pid,
+            REPO_ROOT.parent / "hivebench-studio" / "apps" / "cli" / "config" / "agent-presets" / pid,
+            Path.home() / ".dsh" / ".agent-presets" / pid,
+        ]
+        if not any((c / "agent.cordis.yml").is_file() or c.is_dir() for c in candidates):
+            # also check legacy check via list logic — but allow hive-curator etc. even if not on disk yet (will be created)
+            pass
+        try:
+            p = REPO_ROOT / "harness_state" / "selected_agent_preset.txt"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(pid, encoding="utf-8")
+        except Exception as exc:
+            raise HTTPException(500, str(exc))
+        return {"agentPreset": pid}
+
+    @app.post("/v1/agent-presets/open-location")
+    async def agent_presets_open_location(request: Request):
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(422, "invalid JSON")
+        pid = str(body.get("agentPreset") or body.get("id") or "").strip()
+        if not pid:
+            raise HTTPException(422, "agentPreset required")
+        candidates = [
+            REPO_ROOT.parent / "hivebench-studio" / "packages" / "preset" / "agent-presets" / "presets" / pid,
+            REPO_ROOT.parent / "hivebench-studio" / "apps" / "cli" / "config" / "agent-presets" / pid,
+            Path.home() / ".dsh" / ".agent-presets" / pid,
+        ]
+        preset_dir = None
+        for cand in candidates:
+            if cand.is_dir():
+                preset_dir = cand
+                break
+        if preset_dir is None or not preset_dir.exists():
+            raise HTTPException(404, f"preset not found: {pid}")
+        import sys, subprocess, os
+        try:
+            if sys.platform == "win32":
+                os.startfile(str(preset_dir))
+                editor = "explorer"
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(preset_dir)])
+                editor = "open"
+            else:
+                opened = False
+                for cmd in [["xdg-open", str(preset_dir)], ["gio", "open", str(preset_dir)]]:
+                    try:
+                        subprocess.Popen(cmd)
+                        editor = cmd[0]
+                        opened = True
+                        break
+                    except FileNotFoundError:
+                        continue
+                if not opened:
+                    raise FileNotFoundError("no file manager found (tried xdg-open, gio)")
+            return {"agentPreset": pid, "path": str(preset_dir), "editor": editor}
+        except Exception as exc:
+            raise HTTPException(500, f"failed to open {preset_dir}: {exc}")
 
     @app.get("/v1/agent-presets/list")
     def agent_presets_list():
@@ -3528,10 +3899,18 @@ def create_app(
                          "Full coding agent with file editing, shell, file and web search, skills, planning, goals, subagents, and workflows.", 1),
             "code": ("PTC mode",
                      "All Standard mode capabilities, with tools exposed through the Code Mode SDK so the model can combine multi-step operations in one TypeScript program.", 2),
+            "ptc": ("PTC mode",
+                     "All Standard mode capabilities, with tools exposed through the Code Mode SDK so the model can combine multi-step operations in one TypeScript program.", 2),
             "minimal": ("Minimal mode",
                         "Two-tool coding agent with persistent bash and str_replace_editor.", 3),
             "cordis": ("Creator mode",
-                       "Built for creating custom agent presets, with all Standard mode capabilities plus runtime inspection, plugin experiments, and preset-authoring guidance.", 4),
+                       "Creator plus Hive: author new presets, including Hive-aware agents (copy any Hive-* preset). Includes Cordis inspection and plugin authoring with Hive context.", 4),
+            "hive-standard": ("Hive Standard",
+                              "DSH Standard with Hive support — full coding agent (files, shell, web, skills, subagents) plus Hive-curated long-horizon context.", 1),
+            "hive-ptc": ("Hive PTC",
+                         "DSH PTC with Hive support — Code-Mode SDK (single TypeScript program for multi-tool) plus Hive memory.", 2),
+            "hive-minimal": ("Hive Minimal",
+                             "DSH Minimal with Hive support — lean two-tool (bash + editor) plus Hive memory.", 3),
             "hive-curator": ("Hive Curator",
                              "Standard coding agent plus Hive curation: each turn the local sidecar assembles relevant context and observes replies, ideal for long tasks and cross-session memory. Requires a local Hive sidecar; offline it degrades to Standard.", 4),
             "local-first": ("Local-first",
@@ -3573,10 +3952,18 @@ def create_app(
             return meta
 
         presets = []
-        shipped_root = REPO_ROOT.parent / "hivebench-studio" / "apps" / "cli" / "config" / "agent-presets"
-        if shipped_root.is_dir():
+        # DSH moved shipped presets to packages/preset/agent-presets/presets (SHIPPED_PRESET_ROOT in discovery.ts)
+        shipped_candidates = [
+            REPO_ROOT.parent / "hivebench-studio" / "packages" / "preset" / "agent-presets" / "presets",
+            REPO_ROOT.parent / "hivebench-studio" / "apps" / "cli" / "config" / "agent-presets",
+        ]
+        for shipped_root in shipped_candidates:
+            if not shipped_root.is_dir():
+                continue
             for d in shipped_root.iterdir():
                 if d.is_dir() and re.match(r"^[a-z0-9][a-z0-9-]*$", d.name):
+                    if any(p["id"] == d.name for p in presets):
+                        continue
                     m = _preset_meta(d)
                     presets.append({
                         "id": d.name,
@@ -3602,6 +3989,10 @@ def create_app(
                         "order": m["order"],
                         "isDefault": False,
                     })
+        # Hide legacy defaults when Hive variants exist (delete defaults except Creator per user request)
+        hive_ids = {p["id"] for p in presets if p["id"].startswith("hive-")}
+        if hive_ids:
+            presets = [p for p in presets if p["id"] not in {"standard", "code", "ptc", "minimal"}]
         # Order by explicit order then id, user presets keep their order but appear after system by order value
         presets.sort(key=lambda x: (x.get("order", 999), x["id"]))
         # Strip internal order before returning, keep isDefault/broken/description for UI
@@ -3627,6 +4018,15 @@ def create_app(
             return {"repo": repo, "files": models_manager.hub_files(repo)}
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(502, f"cannot list '{repo}': {exc}")
+
+    @app.get("/v1/models/hf-link")
+    def hf_link(file: str = ""):
+        if not file.strip():
+            raise HTTPException(422, "file must not be empty")
+        try:
+            return models_manager.hf_readme_link(file)
+        except Exception as exc:  # noqa: BLE001 - network errors surface as 502
+            raise HTTPException(502, f"hugging face lookup failed: {exc}")
 
     @app.post("/v1/models/hub/download")
     def hub_download(req: HubDownloadRequest):

@@ -249,6 +249,7 @@ See `docs/INSTALL.md` for the full setup and run guide, and
 
 ## Documentation
 
+- **`HIVE-STUDIO.md`**, the Studio Console (HiveBench): tabs tour, setup, profiles, engines, roadmap
 - **`docs/INSTALL.md`**, full-stack install guide (system + benchmark + studio, fresh machine)
 - **`docs/INTEGRATE.md`**, using hive-memory inside OpenCode, dsh, or your own harness
 - **`HIVE-WHITE-PAPER.md`**, the theory: postulates, falsifiable predictions P1-P11 with measured verdicts (§8), the PES metric (§6), KV-compression landscape (§1.6), threats & limitations (§9)
